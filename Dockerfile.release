@@ -3,6 +3,8 @@
 #   dist/compira-mcp-linux-amd64
 #   dist/compira-mcp-linux-arm64
 #   dist/static/   (Admin UI)
+# Binaries must be built on ubuntu-22.04 (or older glibc) — not ubuntu-24.04 —
+# or you get: version `GLIBC_2.38' not found against bookworm's libc.
 FROM debian:bookworm-slim
 ARG TARGETARCH
 WORKDIR /app

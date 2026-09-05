@@ -26,13 +26,14 @@ jobs:
             target: aarch64-pc-windows-msvc
             artifact: compira-mcp-windows-arm64.exe
             archive: compira-mcp-windows-arm64.zip
+          # Build on 22.04 so glibc stays ≤ bookworm / most distros (not 24.04's 2.38+)
           - name: linux-amd64
-            os: ubuntu-latest
+            os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             artifact: compira-mcp-linux-amd64
             archive: compira-mcp-linux-amd64.tar.gz
           - name: linux-arm64
-            os: ubuntu-latest
+            os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
             artifact: compira-mcp-linux-arm64
             archive: compira-mcp-linux-arm64.tar.gz
