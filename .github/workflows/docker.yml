@@ -111,11 +111,17 @@ jobs:
           name: docker-static
           path: dist/static
 
-      - name: Prepare executables
+      - name: Prepare build context
         run: |
+          set -euo pipefail
           chmod +x dist/compira-mcp-linux-amd64 dist/compira-mcp-linux-arm64
           test -f dist/static/index.html
           ls -lhR dist
+          # Root dist/ must be in the Docker context (not dockerignored)
+          if grep -nE '^(\*\*/dist|/?dist)/?$' .dockerignore; then
+            echo "ERROR: .dockerignore excludes root dist/ required by Dockerfile.release" >&2
+            exit 1
+          fi
 
       - name: Set up QEMU with Docker Hub retry
         shell: bash
@@ -162,5 +168,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
           cache-from: type=gha
           cache-to: type=gha,mode=max

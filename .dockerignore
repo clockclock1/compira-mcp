@@ -2,12 +2,17 @@
 .github
 **/node_modules
 **/target
-**/dist
+frontend/dist
+frontend/node_modules
+mcp-demo-home/node_modules
+mcp-demo-home/dist
+backend/target
 data
+data-test
+test-data
+verify-data
 *.md
 !README.md
-frontend/node_modules
-backend/target
 **/.DS_Store
 **/Thumbs.db
 *.bat
@@ -16,3 +21,5 @@ start.bat
 scripts/verify-e2e.ps1
 agent-transcripts
 .cursor
+# Keep root ./dist for Dockerfile.release (CI binaries + static).
+# Do NOT add **/dist or /dist here.
