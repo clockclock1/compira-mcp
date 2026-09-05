@@ -99,22 +99,23 @@ start.bat / dev.bat # Windows
 
 ## 部署方式
 
-### 1. Docker Compose（推荐自建）
+### 1. Docker Compose（推荐）
 
-适合本机 / 单机服务器，使用多阶段 `Dockerfile` 现场编译：
+默认拉取 GHCR 多架构镜像（不本地 build），按宿主机自动选择 `linux/amd64` / `linux/arm64`：
 
 ```bash
 git clone https://github.com/clockclock1/compira-mcp.git
 cd compira-mcp
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 数据卷：`compira-data` → 容器内 `/app/data`。  
 访问 <http://localhost:8080>
 
-### 2. GHCR 多架构镜像（Release 推送）
+需要指定版本时，可改 `docker-compose.yml` 中的 tag，例如 `ghcr.io/clockclock1/compira-mcp:v0.1.0`。
 
-发布 GitHub Release 后，Actions 会构建并推送：
+### 2. 直接 `docker run`
 
 ```bash
 docker pull ghcr.io/clockclock1/compira-mcp:latest
@@ -128,7 +129,7 @@ docker run -d --name compira-mcp \
   ghcr.io/clockclock1/compira-mcp:latest
 ```
 
-`linux/amd64` 与 `linux/arm64` 自动按宿主机选择。
+镜像由 Release 时的 Actions 构建并推送到 `ghcr.io/clockclock1/compira-mcp`。
 
 ### 3. Release 二进制包
 

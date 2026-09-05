@@ -1,12 +1,6 @@
 services:
   compira-mcp:
-    # Local build (default). For published images:
-    #   image: ghcr.io/clockclock1/compira-mcp:latest
-    #   and comment out `build:`.
-    image: compira-mcp:local
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/clockclock1/compira-mcp:latest
     ports:
       - "8080:8080"
     volumes:
