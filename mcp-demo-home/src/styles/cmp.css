@@ -1,0 +1,205 @@
+/* Styles for MCP-exported Cmp* classnames (SFCs ship markup only). */
+
+.cmp-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  line-height: 1.2;
+}
+.cmp-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.cmp-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.cmp-btn--small {
+  padding: 0.4rem 0.9rem;
+  font-size: 0.8rem;
+}
+.cmp-btn--medium {
+  padding: 0.65rem 1.25rem;
+  font-size: 0.95rem;
+}
+.cmp-btn--large {
+  padding: 0.85rem 1.6rem;
+  font-size: 1.05rem;
+}
+.cmp-btn--default {
+  background: #fff8ef;
+  color: #1c1914;
+  border-color: #d9cbb8;
+}
+.cmp-btn--primary {
+  background: #c24e3c;
+  color: #fff8ef;
+  box-shadow: 0 8px 24px rgba(194, 78, 60, 0.28);
+}
+.cmp-btn--success {
+  background: #2f6b4f;
+  color: #f2fff8;
+}
+.cmp-btn--warning {
+  background: #c9852a;
+  color: #fff8ef;
+}
+.cmp-btn--danger {
+  background: #a33b3b;
+  color: #fff6f6;
+}
+
+.cmp-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.cmp-input__inner {
+  width: 100%;
+  border: 1px solid #d5c7b4;
+  background: #fffdf8;
+  border-radius: 12px;
+  padding: 0.75rem 2.2rem 0.75rem 0.95rem;
+  font: inherit;
+  color: #1c1914;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.cmp-input__inner:focus {
+  border-color: #c24e3c;
+  box-shadow: 0 0 0 3px rgba(194, 78, 60, 0.15);
+}
+.cmp-input__clear {
+  position: absolute;
+  right: 0.55rem;
+  border: 0;
+  background: transparent;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  color: #8a7c6a;
+}
+
+.cmp-card {
+  background: rgba(255, 250, 242, 0.88);
+  border: 1px solid #e4d7c5;
+  border-radius: 18px;
+  padding: 1.25rem 1.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.cmp-card.is-shadow-always,
+.cmp-card.is-shadow-hover:hover {
+  box-shadow: 0 18px 40px rgba(48, 36, 22, 0.08);
+}
+.cmp-card__header {
+  font-family: "Fraunces", Georgia, serif;
+  font-weight: 650;
+  font-size: 1.2rem;
+  color: #1c1914;
+}
+.cmp-card__body {
+  flex: 1;
+  color: #4a4034;
+}
+.cmp-card__footer {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed #e0d3c0;
+}
+
+.cmp-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  cursor: pointer;
+  user-select: none;
+}
+.cmp-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.cmp-switch__core {
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  background: #cfc0ad;
+  position: relative;
+  transition: background 0.2s ease;
+}
+.cmp-switch__core::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fffaf2;
+  transition: transform 0.2s ease;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+.cmp-switch.is-checked .cmp-switch__core {
+  background: #2f6b4f;
+}
+.cmp-switch.is-checked .cmp-switch__core::after {
+  transform: translateX(18px);
+}
+.cmp-switch.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+.cmp-switch__label {
+  font-size: 0.9rem;
+  color: #4a4034;
+}
+
+.cmp-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+.cmp-tag__close {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+  opacity: 0.7;
+}
+.cmp-tag--primary {
+  background: #f4e2dc;
+  color: #8a3428;
+  border-color: #e8c4ba;
+}
+.cmp-tag--success {
+  background: #dceee4;
+  color: #245541;
+  border-color: #b9d9c8;
+}
+.cmp-tag--warning {
+  background: #f6e6c8;
+  color: #7a5310;
+}
+.cmp-tag--danger {
+  background: #f3d6d6;
+  color: #7a2a2a;
+}
+.cmp-tag--info {
+  background: #ebe4d8;
+  color: #5a5044;
+}

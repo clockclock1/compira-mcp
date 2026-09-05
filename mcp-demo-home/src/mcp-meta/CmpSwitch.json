@@ -1,0 +1,49 @@
+{
+  "meta": {
+    "description": "开关 Switch",
+    "events": [],
+    "file_path": "uploads/CmpSwitch.vue",
+    "framework": "vue",
+    "id": "cceeafc9-a3b9-4dce-9bef-a783c867c976",
+    "library_id": "8d4aca4c-51e6-4a9b-b837-3fca1cbb8532",
+    "name": "CmpSwitch",
+    "props": [
+      {
+        "default": null,
+        "description": null,
+        "name": "activeText",
+        "required": false,
+        "type": "string"
+      },
+      {
+        "default": null,
+        "description": null,
+        "name": "disabled",
+        "required": false,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "description": null,
+        "name": "inactiveText",
+        "required": false,
+        "type": "string"
+      }
+    ],
+    "slots": [
+      {
+        "description": "Default slot",
+        "name": "default"
+      }
+    ],
+    "tags": [
+      "vue",
+      "template",
+      "v-model"
+    ]
+  },
+  "docs": {
+    "docs": ""
+  },
+  "examples": []
+}

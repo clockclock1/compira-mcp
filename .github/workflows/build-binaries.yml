@@ -1,0 +1,138 @@
+name: Build Executables
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-amd64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: compira-mcp-windows-amd64.exe
+            archive: compira-mcp-windows-amd64.zip
+          - name: windows-arm64
+            os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact: compira-mcp-windows-arm64.exe
+            archive: compira-mcp-windows-arm64.zip
+          - name: linux-amd64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: compira-mcp-linux-amd64
+            archive: compira-mcp-linux-amd64.tar.gz
+          - name: linux-arm64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: compira-mcp-linux-arm64
+            archive: compira-mcp-linux-arm64.tar.gz
+          - name: macos-amd64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: compira-mcp-macos-amd64
+            archive: compira-mcp-macos-amd64.tar.gz
+          - name: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: compira-mcp-macos-arm64
+            archive: compira-mcp-macos-arm64.tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build Admin UI
+        working-directory: frontend
+        run: |
+          npm ci || npm install
+          npm run build
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Windows build deps (Perl for vendored OpenSSL)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install strawberryperl -y
+          echo "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+          key: ${{ matrix.target }}
+
+      - name: Install Linux arm64 linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build executable
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          fi
+          cargo build --release --locked --target "${{ matrix.target }}"
+          mkdir -p ../dist/pkg
+          binary="target/${{ matrix.target }}/release/compira-mcp"
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            binary="${binary}.exe"
+            cp "$binary" "../dist/pkg/compira-mcp.exe"
+            cp "$binary" "../dist/${{ matrix.artifact }}"
+          else
+            cp "$binary" "../dist/pkg/compira-mcp"
+            cp "$binary" "../dist/${{ matrix.artifact }}"
+            chmod +x "../dist/pkg/compira-mcp" "../dist/${{ matrix.artifact }}"
+          fi
+          cp -r ../frontend/dist ../dist/pkg/static
+
+      - name: Pack release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          if [[ "${{ matrix.archive }}" == *.zip ]]; then
+            7z a -tzip "${{ matrix.archive }}" pkg/*
+          else
+            tar -czf "${{ matrix.archive }}" -C pkg .
+          fi
+          ls -lh
+
+      - name: Upload executable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            dist/${{ matrix.artifact }}
+            dist/${{ matrix.archive }}
+          if-no-files-found: error
+
+      - name: Attach files to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: |
+            dist/${{ matrix.artifact }}
+            dist/${{ matrix.archive }}

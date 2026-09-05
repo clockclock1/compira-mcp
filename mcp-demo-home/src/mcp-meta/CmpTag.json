@@ -1,0 +1,41 @@
+{
+  "meta": {
+    "description": "标签 Tag",
+    "events": [],
+    "file_path": "uploads/CmpTag.vue",
+    "framework": "vue",
+    "id": "3006b7c6-8476-4f74-9f50-d9ba139f4223",
+    "library_id": "8d4aca4c-51e6-4a9b-b837-3fca1cbb8532",
+    "name": "CmpTag",
+    "props": [
+      {
+        "default": null,
+        "description": null,
+        "name": "closable",
+        "required": false,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "description": null,
+        "name": "type",
+        "required": false,
+        "type": "'primary' | 'success' | 'warning' | 'danger' | 'info'"
+      }
+    ],
+    "slots": [
+      {
+        "description": "Default slot",
+        "name": "default"
+      }
+    ],
+    "tags": [
+      "vue",
+      "template"
+    ]
+  },
+  "docs": {
+    "docs": ""
+  },
+  "examples": []
+}

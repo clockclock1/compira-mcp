@@ -1,0 +1,1076 @@
+mod models;
+mod schema;
+
+pub use models::*;
+pub use schema::init_schema;
+
+use chrono::{DateTime, Utc};
+use rusqlite::{params, Connection, OptionalExtension};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use uuid::Uuid;
+
+#[derive(Clone)]
+pub struct Database {
+    conn: Arc<Mutex<Connection>>,
+}
+
+impl Database {
+    pub fn open(path: &str) -> anyhow::Result<Self> {
+        if let Some(parent) = Path::new(path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let conn = Connection::open(path)?;
+        init_schema(&conn)?;
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+        })
+    }
+
+    pub fn log(&self, level: &str, message: &str, context: Option<&str>) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO app_logs (level, message, context, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![level, message, context, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_logs(&self, limit: i64) -> anyhow::Result<Vec<LogEntry>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, level, message, context, created_at FROM app_logs ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit], |row| {
+            Ok(LogEntry {
+                id: row.get(0)?,
+                level: row.get(1)?,
+                message: row.get(2)?,
+                context: row.get(3)?,
+                created_at: row.get::<_, String>(4)?.parse().unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn create_library(
+        &self,
+        name: &str,
+        repo_url: &str,
+        branch: &str,
+        local_path: &str,
+        rules: Option<&str>,
+        source_type: &str,
+    ) -> anyhow::Result<Library> {
+        self.create_library_with_id(
+            &Uuid::new_v4().to_string(),
+            name,
+            repo_url,
+            branch,
+            local_path,
+            rules,
+            source_type,
+        )
+    }
+
+    pub fn create_library_with_id(
+        &self,
+        id: &str,
+        name: &str,
+        repo_url: &str,
+        branch: &str,
+        local_path: &str,
+        rules: Option<&str>,
+        source_type: &str,
+    ) -> anyhow::Result<Library> {
+        let now = Utc::now();
+        let source_type = if source_type.is_empty() {
+            "git"
+        } else {
+            source_type
+        };
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id, name, repo_url, branch, local_path, status, rules, created_at, source_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, ?8)",
+            params![
+                id,
+                name,
+                repo_url,
+                branch,
+                local_path,
+                rules,
+                now.to_rfc3339(),
+                source_type
+            ],
+        )?;
+        Ok(Library {
+            id: id.into(),
+            name: name.into(),
+            repo_url: repo_url.into(),
+            branch: branch.into(),
+            local_path: local_path.into(),
+            status: "pending".into(),
+            component_count: 0,
+            rules: rules.map(String::from),
+            source_type: source_type.into(),
+            last_synced_at: None,
+            created_at: now,
+        })
+    }
+
+    fn map_library_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Library> {
+        Ok(Library {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            repo_url: row.get(2)?,
+            branch: row.get(3)?,
+            local_path: row.get(4)?,
+            status: row.get(5)?,
+            component_count: row.get(6)?,
+            rules: row.get(7)?,
+            last_synced_at: row
+                .get::<_, Option<String>>(8)?
+                .and_then(|s| s.parse().ok()),
+            created_at: row.get::<_, String>(9)?.parse().unwrap_or_else(|_| Utc::now()),
+            source_type: row
+                .get::<_, Option<String>>(10)?
+                .unwrap_or_else(|| "git".into()),
+        })
+    }
+
+    pub fn list_libraries(&self) -> anyhow::Result<Vec<Library>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, repo_url, branch, local_path, status, component_count, rules, last_synced_at, created_at, COALESCE(source_type, 'git')
+             FROM libraries ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], Self::map_library_row)?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn get_library(&self, id: &str) -> anyhow::Result<Option<Library>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, name, repo_url, branch, local_path, status, component_count, rules, last_synced_at, created_at, COALESCE(source_type, 'git')
+             FROM libraries WHERE id = ?1",
+            [id],
+            Self::map_library_row,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn get_component_id_by_path(
+        &self,
+        library_id: &str,
+        file_path: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id FROM components WHERE library_id = ?1 AND file_path = ?2",
+            params![library_id, file_path],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn count_library_components(&self, library_id: &str) -> anyhow::Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM components WHERE library_id = ?1",
+            [library_id],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+    }
+
+    pub fn update_library_status(
+        &self,
+        id: &str,
+        status: &str,
+        component_count: Option<i64>,
+    ) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        if let Some(count) = component_count {
+            conn.execute(
+                "UPDATE libraries SET status = ?1, component_count = ?2, last_synced_at = ?3 WHERE id = ?4",
+                params![status, count, Utc::now().to_rfc3339(), id],
+            )?;
+        } else {
+            conn.execute(
+                "UPDATE libraries SET status = ?1 WHERE id = ?2",
+                params![status, id],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn update_library(&self, lib: &Library) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE libraries SET name = ?1, branch = ?2, rules = ?3 WHERE id = ?4",
+            params![lib.name, lib.branch, lib.rules, lib.id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_library_name(&self, id: &str, name: &str) -> anyhow::Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            anyhow::bail!("library name cannot be empty");
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE libraries SET name = ?1 WHERE id = ?2",
+            params![name, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_library(&self, id: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM components_fts WHERE library_id = ?1", [id])?;
+        conn.execute("DELETE FROM libraries WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub fn upsert_component(&self, component: &Component, source: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO components (id, library_id, name, file_path, framework, description, props_json, events_json, slots_json, tags_json, source_content)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(library_id, file_path) DO UPDATE SET
+               name = excluded.name,
+               framework = excluded.framework,
+               description = excluded.description,
+               props_json = excluded.props_json,
+               events_json = excluded.events_json,
+               slots_json = excluded.slots_json,
+               tags_json = excluded.tags_json,
+               source_content = excluded.source_content",
+            params![
+                component.id,
+                component.library_id,
+                component.name,
+                component.file_path,
+                component.framework,
+                component.description,
+                serde_json::to_string(&component.props)?,
+                serde_json::to_string(&component.events)?,
+                serde_json::to_string(&component.slots)?,
+                serde_json::to_string(&component.tags)?,
+                source,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_component_docs(&self, component_id: &str, content: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO component_docs (component_id, content) VALUES (?1, ?2)
+             ON CONFLICT(component_id) DO UPDATE SET content = excluded.content",
+            params![component_id, content],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_component_examples(
+        &self,
+        component_id: &str,
+        examples: &[(String, String)],
+    ) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM component_examples WHERE component_id = ?1",
+            [component_id],
+        )?;
+        for (title, code) in examples {
+            conn.execute(
+                "INSERT INTO component_examples (id, component_id, title, code) VALUES (?1, ?2, ?3, ?4)",
+                params![Uuid::new_v4().to_string(), component_id, title, code],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn clear_library_components(&self, library_id: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM components_fts WHERE library_id = ?1",
+            [library_id],
+        )?;
+        conn.execute("DELETE FROM components WHERE library_id = ?1", [library_id])?;
+        Ok(())
+    }
+
+    pub fn index_component(
+        &self,
+        component: &Component,
+        library_name: &str,
+        source_snippet: &str,
+    ) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM components_fts WHERE component_id = ?1",
+            [&component.id],
+        )?;
+        let props_text: String = component
+            .props
+            .iter()
+            .map(|p| format!("{} {}", p.name, p.description.as_deref().unwrap_or("")))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let events_text: String = component
+            .events
+            .iter()
+            .map(|e| e.name.clone())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let tags_text = component.tags.join(" ");
+        conn.execute(
+            "INSERT INTO components_fts (component_id, library_id, library_name, name, description, props_text, events_text, tags_text, source_snippet)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                component.id,
+                component.library_id,
+                library_name,
+                component.name,
+                component.description,
+                props_text,
+                events_text,
+                tags_text,
+                source_snippet.chars().take(2000).collect::<String>(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn search_components(
+        &self,
+        query: &str,
+        library_id: Option<&str>,
+        limit: i64,
+    ) -> anyhow::Result<Vec<ComponentSearchResult>> {
+        let conn = self.conn.lock().unwrap();
+        let fts_query = query
+            .split_whitespace()
+            .map(|w| format!("\"{}\"", w.replace('"', "")))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+
+        let _sql = if library_id.is_some() {
+            "SELECT component_id, library_id, library_name, name, description, bm25(components_fts) as score
+             FROM components_fts WHERE components_fts MATCH ?1 AND library_id = ?2
+             ORDER BY score LIMIT ?3"
+        } else {
+            "SELECT component_id, library_id, library_name, name, description, bm25(components_fts) as score
+             FROM components_fts WHERE components_fts MATCH ?1
+             ORDER BY score LIMIT ?2"
+        };
+
+        let sql = _sql;
+
+        let mut results = Vec::new();
+        if let Some(lib_id) = library_id {
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params![fts_query, lib_id, limit], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, f64>(5)?,
+                ))
+            })?;
+            for row in rows.flatten() {
+                results.push(self.build_search_result(&conn, row)?);
+            }
+        } else {
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params![fts_query, limit], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, f64>(5)?,
+                ))
+            })?;
+            for row in rows.flatten() {
+                results.push(self.build_search_result(&conn, row)?);
+            }
+        }
+        Ok(results)
+    }
+
+    fn build_search_result(
+        &self,
+        conn: &Connection,
+        row: (String, String, String, String, Option<String>, f64),
+    ) -> anyhow::Result<ComponentSearchResult> {
+        let (id, library_id, library_name, name, description, score) = row;
+        let (file_path, framework): (String, String) = conn.query_row(
+            "SELECT file_path, framework FROM components WHERE id = ?1",
+            [&id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok(ComponentSearchResult {
+            id,
+            library_id,
+            library_name,
+            name,
+            file_path,
+            framework,
+            description,
+            score,
+        })
+    }
+
+    pub fn search_source(
+        &self,
+        query: &str,
+        library_id: Option<&str>,
+        limit: i64,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("%{}%", query.replace('%', ""));
+        let sql = if library_id.is_some() {
+            "SELECT c.id, c.name, c.file_path, c.library_id, l.name, substr(c.source_content, 1, 500)
+             FROM components c JOIN libraries l ON c.library_id = l.id
+             WHERE c.source_content LIKE ?1 AND c.library_id = ?2 LIMIT ?3"
+        } else {
+            "SELECT c.id, c.name, c.file_path, c.library_id, l.name, substr(c.source_content, 1, 500)
+             FROM components c JOIN libraries l ON c.library_id = l.id
+             WHERE c.source_content LIKE ?1 LIMIT ?2"
+        };
+
+        let mut results = Vec::new();
+        if let Some(lib_id) = library_id {
+            let mut stmt = conn.prepare(sql)?;
+            let rows = stmt.query_map(params![pattern, lib_id, limit], |row| {
+                Ok(serde_json::json!({
+                    "component_id": row.get::<_, String>(0)?,
+                    "name": row.get::<_, String>(1)?,
+                    "file_path": row.get::<_, String>(2)?,
+                    "library_id": row.get::<_, String>(3)?,
+                    "library_name": row.get::<_, String>(4)?,
+                    "snippet": row.get::<_, String>(5)?,
+                }))
+            })?;
+            for r in rows.flatten() {
+                results.push(r);
+            }
+        } else {
+            let mut stmt = conn.prepare(sql)?;
+            let rows = stmt.query_map(params![pattern, limit], |row| {
+                Ok(serde_json::json!({
+                    "component_id": row.get::<_, String>(0)?,
+                    "name": row.get::<_, String>(1)?,
+                    "file_path": row.get::<_, String>(2)?,
+                    "library_id": row.get::<_, String>(3)?,
+                    "library_name": row.get::<_, String>(4)?,
+                    "snippet": row.get::<_, String>(5)?,
+                }))
+            })?;
+            for r in rows.flatten() {
+                results.push(r);
+            }
+        }
+        Ok(results)
+    }
+
+    pub fn get_component(&self, id: &str) -> anyhow::Result<Option<Component>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, library_id, name, file_path, framework, description, props_json, events_json, slots_json, tags_json
+             FROM components WHERE id = ?1",
+            [id],
+            |row| {
+                Ok(Component {
+                    id: row.get(0)?,
+                    library_id: row.get(1)?,
+                    name: row.get(2)?,
+                    file_path: row.get(3)?,
+                    framework: row.get(4)?,
+                    description: row.get(5)?,
+                    props: serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or_default(),
+                    events: serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or_default(),
+                    slots: serde_json::from_str(&row.get::<_, String>(8)?).unwrap_or_default(),
+                    tags: serde_json::from_str(&row.get::<_, String>(9)?).unwrap_or_default(),
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn get_component_source(&self, id: &str) -> anyhow::Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT source_content FROM components WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn get_component_docs(&self, id: &str) -> anyhow::Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT content FROM component_docs WHERE component_id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn get_component_examples(&self, id: &str) -> anyhow::Result<Vec<ComponentExample>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, component_id, title, code FROM component_examples WHERE component_id = ?1",
+        )?;
+        let rows = stmt.query_map([id], |row| {
+            Ok(ComponentExample {
+                id: row.get(0)?,
+                component_id: row.get(1)?,
+                title: row.get(2)?,
+                code: row.get(3)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn list_components_by_library(&self, library_id: &str) -> anyhow::Result<Vec<Component>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, library_id, name, file_path, framework, description, props_json, events_json, slots_json, tags_json
+             FROM components WHERE library_id = ?1 ORDER BY name",
+        )?;
+        let rows = stmt.query_map([library_id], |row| {
+            Ok(Component {
+                id: row.get(0)?,
+                library_id: row.get(1)?,
+                name: row.get(2)?,
+                file_path: row.get(3)?,
+                framework: row.get(4)?,
+                description: row.get(5)?,
+                props: serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or_default(),
+                events: serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or_default(),
+                slots: serde_json::from_str(&row.get::<_, String>(8)?).unwrap_or_default(),
+                tags: serde_json::from_str(&row.get::<_, String>(9)?).unwrap_or_default(),
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn bootstrap_admin_key(&self, key: &str) -> anyhow::Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM api_keys", [], |r| r.get(0))?;
+        if count > 0 {
+            return Ok(false);
+        }
+        drop(conn);
+        self.create_api_key("admin", key)?;
+        Ok(true)
+    }
+
+    pub fn create_api_key(&self, name: &str, key: &str) -> anyhow::Result<ApiKey> {
+        let id = Uuid::new_v4().to_string();
+        let hash = hash_key(key);
+        let prefix = key.chars().take(8).collect::<String>();
+        let now = Utc::now();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, name, hash, prefix, now.to_rfc3339()],
+        )?;
+        Ok(ApiKey {
+            id,
+            name: name.into(),
+            key_prefix: prefix,
+            created_at: now,
+            last_used_at: None,
+        })
+    }
+
+    pub fn list_api_keys(&self) -> anyhow::Result<Vec<ApiKey>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, key_prefix, created_at, last_used_at FROM api_keys ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ApiKey {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                key_prefix: row.get(2)?,
+                created_at: row.get::<_, String>(3)?.parse().unwrap_or_else(|_| Utc::now()),
+                last_used_at: row
+                    .get::<_, Option<String>>(4)?
+                    .and_then(|s| s.parse().ok()),
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn delete_api_key(&self, id: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM api_keys WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub fn verify_api_key(&self, key: &str) -> anyhow::Result<bool> {
+        let hash = hash_key(key);
+        let conn = self.conn.lock().unwrap();
+        let found: Option<String> = conn
+            .query_row(
+                "SELECT id FROM api_keys WHERE key_hash = ?1",
+                [hash],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(id) = found {
+            conn.execute(
+                "UPDATE api_keys SET last_used_at = ?1 WHERE id = ?2",
+                params![Utc::now().to_rfc3339(), id],
+            )?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    pub fn create_sync_task(&self, library_id: &str) -> anyhow::Result<SyncTask> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO sync_tasks (id, library_id, status, progress, message, started_at)
+             VALUES (?1, ?2, 'running', 0, 'Starting sync...', ?3)",
+            params![id, library_id, now.to_rfc3339()],
+        )?;
+        Ok(SyncTask {
+            id,
+            library_id: library_id.into(),
+            status: "running".into(),
+            progress: 0,
+            message: "Starting sync...".into(),
+            started_at: now,
+            finished_at: None,
+        })
+    }
+
+    pub fn update_sync_task(
+        &self,
+        id: &str,
+        progress: i32,
+        message: &str,
+        status: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        if let Some(s) = status {
+            let finished = if s == "completed" || s == "failed" {
+                Some(Utc::now().to_rfc3339())
+            } else {
+                None
+            };
+            conn.execute(
+                "UPDATE sync_tasks SET progress = ?1, message = ?2, status = ?3, finished_at = COALESCE(?4, finished_at) WHERE id = ?5",
+                params![progress, message, s, finished, id],
+            )?;
+        } else {
+            conn.execute(
+                "UPDATE sync_tasks SET progress = ?1, message = ?2 WHERE id = ?3",
+                params![progress, message, id],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn get_sync_task(&self, id: &str) -> anyhow::Result<Option<SyncTask>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, library_id, status, progress, message, started_at, finished_at FROM sync_tasks WHERE id = ?1",
+            [id],
+            |row| {
+                Ok(SyncTask {
+                    id: row.get(0)?,
+                    library_id: row.get(1)?,
+                    status: row.get(2)?,
+                    progress: row.get(3)?,
+                    message: row.get(4)?,
+                    started_at: row.get::<_, String>(5)?.parse().unwrap_or_else(|_| Utc::now()),
+                    finished_at: row
+                        .get::<_, Option<String>>(6)?
+                        .and_then(|s| s.parse().ok()),
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn list_sync_tasks(&self, library_id: Option<&str>) -> anyhow::Result<Vec<SyncTask>> {
+        let conn = self.conn.lock().unwrap();
+        let (sql, param): (&str, Option<String>) = if let Some(lid) = library_id {
+            (
+                "SELECT id, library_id, status, progress, message, started_at, finished_at FROM sync_tasks WHERE library_id = ?1 ORDER BY started_at DESC LIMIT 50",
+                Some(lid.to_string()),
+            )
+        } else {
+            (
+                "SELECT id, library_id, status, progress, message, started_at, finished_at FROM sync_tasks ORDER BY started_at DESC LIMIT 50",
+                None,
+            )
+        };
+
+        let mut stmt = conn.prepare(sql)?;
+        let map_row = |row: &rusqlite::Row<'_>| {
+            Ok(SyncTask {
+                id: row.get(0)?,
+                library_id: row.get(1)?,
+                status: row.get(2)?,
+                progress: row.get(3)?,
+                message: row.get(4)?,
+                started_at: row.get::<_, String>(5)?.parse().unwrap_or_else(|_| Utc::now()),
+                finished_at: row
+                    .get::<_, Option<String>>(6)?
+                    .and_then(|s| s.parse().ok()),
+            })
+        };
+
+        if let Some(p) = param {
+            let rows = stmt.query_map([p], map_row)?;
+            Ok(rows.filter_map(|r| r.ok()).collect())
+        } else {
+            let rows = stmt.query_map([], map_row)?;
+            Ok(rows.filter_map(|r| r.ok()).collect())
+        }
+    }
+
+    pub fn stats(&self) -> anyhow::Result<serde_json::Value> {
+        let conn = self.conn.lock().unwrap();
+        let libraries: i64 =
+            conn.query_row("SELECT COUNT(*) FROM libraries", [], |r| r.get(0))?;
+        let components: i64 =
+            conn.query_row("SELECT COUNT(*) FROM components", [], |r| r.get(0))?;
+        let api_keys: i64 = conn.query_row("SELECT COUNT(*) FROM api_keys", [], |r| r.get(0))?;
+        let users: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
+        Ok(serde_json::json!({
+            "libraries": libraries,
+            "components": components,
+            "api_keys": api_keys,
+            "users": users,
+        }))
+    }
+
+    pub fn count_users(&self) -> anyhow::Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))
+            .map_err(Into::into)
+    }
+
+    pub fn create_user(
+        &self,
+        username: &str,
+        password_hash: &str,
+        role: &str,
+        display_name: Option<&str>,
+    ) -> anyhow::Result<User> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, role, display_name, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, username, password_hash, role, display_name, now.to_rfc3339()],
+        )?;
+        Ok(User {
+            id,
+            username: username.into(),
+            role: role.into(),
+            display_name: display_name.map(String::from),
+            created_at: now,
+            last_login_at: None,
+        })
+    }
+
+    pub fn get_user_by_username(&self, username: &str) -> anyhow::Result<Option<(User, String)>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, username, password_hash, role, display_name, created_at, last_login_at
+             FROM users WHERE username = ?1 COLLATE NOCASE",
+            [username],
+            |row| {
+                Ok((
+                    User {
+                        id: row.get(0)?,
+                        username: row.get(1)?,
+                        role: row.get(3)?,
+                        display_name: row.get(4)?,
+                        created_at: row.get::<_, String>(5)?.parse().unwrap_or_else(|_| Utc::now()),
+                        last_login_at: row
+                            .get::<_, Option<String>>(6)?
+                            .and_then(|s| s.parse().ok()),
+                    },
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn get_user(&self, id: &str) -> anyhow::Result<Option<User>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, username, role, display_name, created_at, last_login_at FROM users WHERE id = ?1",
+            [id],
+            |row| {
+                Ok(User {
+                    id: row.get(0)?,
+                    username: row.get(1)?,
+                    role: row.get(2)?,
+                    display_name: row.get(3)?,
+                    created_at: row.get::<_, String>(4)?.parse().unwrap_or_else(|_| Utc::now()),
+                    last_login_at: row
+                        .get::<_, Option<String>>(5)?
+                        .and_then(|s| s.parse().ok()),
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn list_users(&self) -> anyhow::Result<Vec<User>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, username, role, display_name, created_at, last_login_at FROM users ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(User {
+                id: row.get(0)?,
+                username: row.get(1)?,
+                role: row.get(2)?,
+                display_name: row.get(3)?,
+                created_at: row.get::<_, String>(4)?.parse().unwrap_or_else(|_| Utc::now()),
+                last_login_at: row
+                    .get::<_, Option<String>>(5)?
+                    .and_then(|s| s.parse().ok()),
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn update_user_password(&self, id: &str, password_hash: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE users SET password_hash = ?1 WHERE id = ?2",
+            params![password_hash, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_user_role(&self, id: &str, role: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE users SET role = ?1 WHERE id = ?2", params![role, id])?;
+        Ok(())
+    }
+
+    pub fn delete_user(&self, id: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM users WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub fn touch_user_login(&self, id: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE users SET last_login_at = ?1 WHERE id = ?2",
+            params![Utc::now().to_rfc3339(), id],
+        )?;
+        Ok(())
+    }
+
+    pub fn create_session(&self, user_id: &str, token: &str, expires_at: DateTime<Utc>) -> anyhow::Result<()> {
+        let id = Uuid::new_v4().to_string();
+        let token_hash = hash_key(token);
+        let now = Utc::now();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, user_id, token_hash, expires_at.to_rfc3339(), now.to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_session(&self, token: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM sessions WHERE token_hash = ?1",
+            [hash_key(token)],
+        )?;
+        Ok(())
+    }
+
+    pub fn verify_session(&self, token: &str) -> anyhow::Result<Option<User>> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let row: Option<(String,)> = conn
+            .query_row(
+                "SELECT user_id FROM sessions WHERE token_hash = ?1 AND expires_at > ?2",
+                params![hash_key(token), now],
+                |row| Ok((row.get(0)?,)),
+            )
+            .optional()?;
+        let Some((user_id,)) = row else {
+            return Ok(None);
+        };
+        drop(conn);
+        self.get_user(&user_id)
+    }
+
+    pub fn cleanup_expired_sessions(&self) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM sessions WHERE expires_at <= ?1",
+            [Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn bootstrap_admin_user(
+        &self,
+        username: &str,
+        password_hash: &str,
+    ) -> anyhow::Result<bool> {
+        if self.count_users()? > 0 {
+            return Ok(false);
+        }
+        self.create_user(username, password_hash, "admin", Some("Administrator"))?;
+        Ok(true)
+    }
+
+    pub fn get_setting(&self, key: &str) -> anyhow::Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            params![key, value, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    /// Resolve LLM settings from DB; fill missing fields from env-backed defaults.
+    pub fn get_llm_settings(&self, defaults: &crate::config::Config) -> anyhow::Result<LlmSettings> {
+        let api_key = self
+            .get_setting("llm_api_key")?
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| defaults.llm_api_key.clone());
+        let base_url = self
+            .get_setting("llm_base_url")?
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| defaults.llm_base_url.clone());
+        let model = self
+            .get_setting("llm_model")?
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| defaults.llm_model.clone());
+        Ok(LlmSettings {
+            api_key,
+            base_url,
+            model,
+        })
+    }
+
+    pub fn get_llm_settings_public(
+        &self,
+        defaults: &crate::config::Config,
+    ) -> anyhow::Result<LlmSettingsPublic> {
+        let s = self.get_llm_settings(defaults)?;
+        Ok(LlmSettingsPublic {
+            enabled: s.enabled(),
+            api_key_set: s.enabled(),
+            api_key_masked: s.mask_key(),
+            base_url: s.base_url,
+            model: s.model,
+        })
+    }
+
+    /// Update LLM settings. Empty `api_key` keeps existing key. Empty strings for
+    /// base_url/model keep existing (or defaults on next read).
+    pub fn update_llm_settings(
+        &self,
+        api_key: Option<&str>,
+        base_url: Option<&str>,
+        model: Option<&str>,
+        clear_api_key: bool,
+    ) -> anyhow::Result<()> {
+        if clear_api_key {
+            self.set_setting("llm_api_key", "")?;
+        } else if let Some(k) = api_key {
+            let t = k.trim();
+            if !t.is_empty() {
+                self.set_setting("llm_api_key", t)?;
+            }
+        }
+        if let Some(u) = base_url {
+            let t = u.trim();
+            if !t.is_empty() {
+                self.set_setting("llm_base_url", t.trim_end_matches('/'))?;
+            }
+        }
+        if let Some(m) = model {
+            let t = m.trim();
+            if !t.is_empty() {
+                self.set_setting("llm_model", t)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Seed settings table from env defaults when keys are missing.
+    pub fn bootstrap_llm_settings(&self, defaults: &crate::config::Config) -> anyhow::Result<()> {
+        if self.get_setting("llm_base_url")?.is_none() {
+            self.set_setting("llm_base_url", &defaults.llm_base_url)?;
+        }
+        if self.get_setting("llm_model")?.is_none() {
+            self.set_setting("llm_model", &defaults.llm_model)?;
+        }
+        if self.get_setting("llm_api_key")?.is_none() {
+            if let Some(k) = &defaults.llm_api_key {
+                if !k.trim().is_empty() {
+                    self.set_setting("llm_api_key", k)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn hash_key(key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(key.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+pub fn generate_api_key() -> String {
+    format!("cmcp_{}", Uuid::new_v4().simple())
+}

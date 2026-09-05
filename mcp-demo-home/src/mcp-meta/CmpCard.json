@@ -1,0 +1,49 @@
+{
+  "meta": {
+    "description": "卡片容器",
+    "events": [],
+    "file_path": "uploads/CmpCard.vue",
+    "framework": "vue",
+    "id": "7ed51537-eec9-487e-86a5-00f48f013c75",
+    "library_id": "8d4aca4c-51e6-4a9b-b837-3fca1cbb8532",
+    "name": "CmpCard",
+    "props": [
+      {
+        "default": null,
+        "description": null,
+        "name": "shadow",
+        "required": false,
+        "type": "'always' | 'hover' | 'never'"
+      },
+      {
+        "default": null,
+        "description": null,
+        "name": "title",
+        "required": false,
+        "type": "string"
+      }
+    ],
+    "slots": [
+      {
+        "description": "Default slot",
+        "name": "default"
+      },
+      {
+        "description": null,
+        "name": "footer"
+      },
+      {
+        "description": null,
+        "name": "header"
+      }
+    ],
+    "tags": [
+      "vue",
+      "template"
+    ]
+  },
+  "docs": {
+    "docs": ""
+  },
+  "examples": []
+}

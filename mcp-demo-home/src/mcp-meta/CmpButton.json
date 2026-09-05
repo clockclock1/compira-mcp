@@ -1,0 +1,55 @@
+{
+  "meta": {
+    "description": "基础按钮 — 支持类型与尺寸",
+    "events": [],
+    "file_path": "uploads/CmpButton.vue",
+    "framework": "vue",
+    "id": "d4a6dccc-6ef8-43aa-985c-fa222ce93757",
+    "library_id": "8d4aca4c-51e6-4a9b-b837-3fca1cbb8532",
+    "name": "CmpButton",
+    "props": [
+      {
+        "default": null,
+        "description": null,
+        "name": "disabled",
+        "required": false,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "description": null,
+        "name": "label",
+        "required": false,
+        "type": "string"
+      },
+      {
+        "default": null,
+        "description": null,
+        "name": "size",
+        "required": false,
+        "type": "'small' | 'medium' | 'large'"
+      },
+      {
+        "default": null,
+        "description": null,
+        "name": "type",
+        "required": false,
+        "type": "'primary' | 'success' | 'warning' | 'danger' | 'default'"
+      }
+    ],
+    "slots": [
+      {
+        "description": "Default slot",
+        "name": "default"
+      }
+    ],
+    "tags": [
+      "vue",
+      "template"
+    ]
+  },
+  "docs": {
+    "docs": ""
+  },
+  "examples": []
+}

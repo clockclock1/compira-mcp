@@ -1,0 +1,21 @@
+pub mod api;
+mod ai;
+mod auth;
+mod config;
+mod db;
+mod fetcher;
+pub mod mcp;
+mod parser;
+mod git;
+mod indexer;
+pub mod tasks;
+mod state;
+mod tools_exec;
+
+pub use auth::hash_password;
+pub use config::Config;
+pub use db::{generate_api_key, Database};
+pub use state::{AppState, AuthUser};
+pub use mcp::create_mcp_service;
+pub use tasks::TaskManager;
+pub use tools_exec::{execute_tool, list_tool_names, tool_schemas};

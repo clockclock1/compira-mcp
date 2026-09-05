@@ -1,0 +1,1632 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>组件库 MCP 控制台</title>
+<style>
+/* ============ Design Tokens (from Ardot design) ============ */
+:root{
+  --bg: #0A0C11;
+  --bg-sidebar: #10141B;
+  --bg-card: #151A23;
+  --bg-card-2: #0E1117;
+  --bg-input: #151A23;
+  --bg-code: #0B0E14;
+  --bg-code2: #0D1117;
+  --bg-version: #1A2029;
+  --bg-count: #1F2735;
+  --bg-hover: rgba(99,102,241,0.08);
+  --bg-primary-dim: rgba(99,102,241,0.14);
+  --border: #293042;
+  --border-strong: #3D4A66;
+  --border-chip: #333B4F;
+  --divider: #1B212D;
+  --primary: #6366F1;
+  --primary-light: #818CF8;
+  --primary-dark: #5C5EF2;
+  --text-1: #E8EAF0;
+  --text-2: #98A2B3;
+  --text-3: #5E6675;
+  --text-4: #4A5261;
+  --text-mid: #C9CDD6;
+  --text-dim: #7A8090;
+  --green: #34D399;
+  --green-strong: #33D973;
+  --green-text: #4ADE80;
+  --blue: #38BDF8;
+  --yellow: #FBBF24;
+  --red: #F87171;
+  --purple: #A5B4FC;
+  --violet: #C084FC;
+  --type-blue: #A5D6FF;
+  --font-cn: 'Noto Sans SC','Microsoft YaHei','PingFang SC',sans-serif;
+  --font-en: 'Inter','Segoe UI',sans-serif;
+  --font-mono: 'JetBrains Mono','Consolas','Courier New',monospace;
+  --r-card: 12px;
+  --r-btn: 8px;
+  --r-chip: 6px;
+  --r-lg: 16px;
+  --r-pill: 20px;
+  --shadow-card: 0 24px 48px -8px rgba(0,0,0,0.5);
+  --shadow-btn: 0 8px 20px -4px rgba(92,94,242,0.35);
+  --shadow-btn-sm: 0 6px 16px -4px rgba(92,94,242,0.30);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{height:100%;}
+body{
+  background:var(--bg);
+  color:var(--text-1);
+  font-family:var(--font-cn);
+  font-size:13px;
+  -webkit-font-smoothing:antialiased;
+  overflow:hidden;
+}
+::-webkit-scrollbar{width:8px;height:8px;}
+::-webkit-scrollbar-thumb{background:#2A3247;border-radius:4px;}
+::-webkit-scrollbar-track{background:transparent;}
+button{font-family:inherit;border:none;background:none;cursor:pointer;color:inherit;}
+input,textarea,select{font-family:inherit;color:inherit;outline:none;border:none;background:transparent;}
+a{color:var(--primary-light);text-decoration:none;}
+.mono{font-family:var(--font-mono);}
+
+/* ============ Login ============ */
+#login-view{
+  position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+  overflow:hidden;
+}
+.login-glow{
+  position:absolute;border-radius:50%;pointer-events:none;filter:blur(0px);
+}
+.glow-indigo{width:660px;height:660px;left:-180px;top:-200px;background:radial-gradient(circle,rgba(102,102,242,0.32) 0%,rgba(102,102,242,0) 70%);}
+.glow-violet{width:560px;height:560px;right:-140px;bottom:-160px;background:radial-gradient(circle,rgba(140,89,242,0.26) 0%,rgba(140,89,242,0) 70%);}
+.login-top-logo{
+  position:absolute;top:32px;left:36px;display:flex;align-items:center;gap:10px;
+}
+.login-logo-icon{
+  width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#6366F1,#8B5CF6);
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 14px -2px rgba(99,102,241,0.5);
+}
+.login-logo-icon svg{width:18px;height:18px;}
+.login-logo-title{font-size:15px;font-weight:600;color:var(--text-1);}
+.login-logo-sub{font-size:9.5px;letter-spacing:1.2px;color:var(--text-4);font-family:var(--font-en);}
+.login-card{
+  position:relative;width:420px;background:#12151D;border:1px solid var(--border);
+  border-radius:var(--r-lg);padding:36px 36px 30px;box-shadow:var(--shadow-card);
+  z-index:1;
+}
+.login-card-title{font-size:22px;font-weight:600;color:var(--text-1);}
+.login-card-sub{font-size:12.5px;line-height:19px;color:var(--text-3);margin-top:6px;}
+.login-field{margin-top:18px;}
+.login-field label{display:block;font-size:12.5px;font-weight:500;color:var(--text-2);margin-bottom:8px;}
+.login-input{
+  height:42px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--r-btn);
+  padding:0 12px;font-size:13px;width:100%;color:var(--text-2);transition:border-color .15s;
+}
+.login-input:focus{border-color:var(--primary);}
+.login-input::placeholder{color:var(--text-3);}
+.login-options{display:flex;align-items:center;justify-content:space-between;margin-top:16px;}
+.remember{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-2);cursor:pointer;}
+.checkbox{
+  width:16px;height:16px;border-radius:4px;background:var(--primary);
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+.checkbox svg{width:10px;height:10px;stroke:#fff;stroke-width:2.2;fill:none;}
+.login-forgot{font-size:12.5px;font-weight:500;color:var(--primary-light);cursor:pointer;}
+.login-btn{
+  width:100%;height:44px;background:var(--primary);border-radius:var(--r-btn);
+  font-size:14px;font-weight:600;color:#fff;margin-top:20px;
+  box-shadow:var(--shadow-btn);transition:background .15s,transform .1s;
+}
+.login-btn:hover{background:#7577F5;}
+.login-btn:active{transform:scale(.99);}
+.login-note{font-size:11px;color:var(--text-4);text-align:center;margin-top:18px;}
+.login-copyright{position:absolute;left:36px;bottom:32px;font-size:11px;color:var(--text-4);font-family:var(--font-en);}
+.login-version{
+  position:absolute;right:36px;bottom:32px;font-size:11px;color:var(--text-3);
+  border:1px solid var(--border-chip);padding:5px 10px;border-radius:var(--r-chip);
+  font-family:var(--font-mono);
+}
+
+/* ============ App Layout ============ */
+#app{display:none;height:100vh;width:1440px;max-width:100%;margin:0 auto;background:var(--bg);}
+.sidebar{
+  position:fixed;left:0;top:0;bottom:0;width:232px;background:var(--bg-sidebar);
+  display:flex;flex-direction:column;padding:20px 12px 16px;z-index:10;
+}
+.logo-row{display:flex;align-items:center;gap:10px;padding:0 8px 22px;}
+.logo-box{
+  width:34px;height:34px;border-radius:9px;flex-shrink:0;
+  background:linear-gradient(135deg,#6366F1,#8B5CF6);
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 14px -2px rgba(99,102,241,0.5);
+}
+.logo-box svg{width:18px;height:18px;}
+.logo-text{display:flex;flex-direction:column;}
+.logo-title{font-size:14px;font-weight:600;color:var(--text-1);}
+.logo-sub{font-size:8.5px;letter-spacing:1px;color:var(--text-4);font-family:var(--font-en);}
+.nav{display:flex;flex-direction:column;gap:2px;}
+.nav-item{
+  display:flex;align-items:center;gap:10px;height:40px;padding:0 12px;border-radius:8px;
+  font-size:13.5px;font-weight:500;color:var(--text-2);cursor:pointer;user-select:none;
+  transition:background .12s,color .12s;
+}
+.nav-item:hover{background:rgba(255,255,255,0.04);}
+.nav-item.active{background:var(--bg-hover);color:var(--primary-light);}
+.nav-item svg{width:18px;height:18px;flex-shrink:0;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;}
+.nav-spacer{flex:1;}
+.user-card{
+  display:flex;align-items:center;gap:10px;padding:10px 8px;border-top:1px solid var(--divider);
+}
+.user-avatar{
+  width:32px;height:32px;border-radius:50%;background:#30385C;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:500;color:var(--purple);
+}
+.user-text{display:flex;flex-direction:column;min-width:0;}
+.user-name{font-size:12.5px;font-weight:500;color:var(--text-1);}
+.user-meta{font-size:10px;color:var(--text-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.content{
+  margin-left:232px;height:100vh;overflow-y:auto;padding:28px 32px 24px;
+}
+.page{display:none;animation:fadeIn .18s ease;}
+.page.active{display:block;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
+
+/* ============ Page Header ============ */
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;}
+.page-header h1{font-size:21px;font-weight:600;color:var(--text-1);}
+.page-header .page-sub{font-size:12.5px;color:var(--text-3);margin-top:4px;}
+.header-actions{display:flex;align-items:center;gap:10px;}
+
+/* chips & badges */
+.chip-status{
+  display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border-radius:var(--r-pill);
+  font-size:12px;font-weight:500;
+}
+.chip-green{background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.35);color:var(--green-text);}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--green-strong);flex-shrink:0;}
+.dot-red{background:var(--red);}
+.dot-yellow{background:var(--yellow);}
+.dot-blue{background:var(--blue);}
+.chip-method{
+  padding:2px 8px;border-radius:var(--r-chip);font-size:11px;font-family:var(--font-mono);
+  color:var(--violet);background:#21172B;
+}
+.chip-count{padding:2px 8px;border-radius:var(--r-chip);font-size:11px;font-family:var(--font-en);color:var(--text-2);background:var(--bg-count);}
+.chip-version{
+  padding:4px 9px;border-radius:var(--r-chip);font-size:11.5px;font-family:var(--font-mono);
+  color:var(--text-2);background:var(--bg-version);border:1px solid #3D4559;
+}
+.chip-type{
+  padding:4px 9px;border-radius:var(--r-chip);font-size:11.5px;font-weight:500;
+  color:var(--type-blue);background:rgba(96,165,250,0.10);
+}
+.chip-tag{padding:3px 9px;border-radius:var(--r-chip);font-size:11px;color:var(--text-2);background:rgba(255,255,255,0.05);}
+.chip-role{padding:3px 10px;border-radius:var(--r-chip);font-size:11px;font-family:var(--font-mono);font-weight:500;color:var(--purple);background:#211C47;}
+.chip-file{
+  padding:3px 10px;border-radius:var(--r-chip);font-size:11px;font-family:var(--font-mono);
+  color:var(--text-2);background:var(--bg-count);border:1px solid #33425A;
+}
+
+/* buttons */
+.btn{
+  display:inline-flex;align-items:center;gap:8px;height:38px;padding:0 16px;border-radius:var(--r-btn);
+  font-size:13px;font-weight:500;transition:background .15s,box-shadow .15s;white-space:nowrap;
+}
+.btn-primary{background:var(--primary);color:#fff;box-shadow:var(--shadow-btn-sm);}
+.btn-primary:hover{background:#7577F5;}
+.btn-ghost{background:transparent;border:1px solid var(--border);color:var(--text-2);}
+.btn-ghost:hover{border-color:var(--border-strong);color:var(--text-1);}
+.btn-ghost-sm{height:36px;padding:0 14px;font-size:13px;}
+.btn-sm{height:38px;padding:0 16px;font-size:13px;}
+.btn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;}
+.link-action{font-size:12.5px;font-weight:500;color:var(--primary-light);cursor:pointer;transition:opacity .12s;}
+.link-action:hover{opacity:.8;}
+.link-action.danger{color:var(--red);}
+.link-action.muted{color:var(--text-2);}
+
+/* ============ Cards ============ */
+.card{
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--r-card);
+  overflow:hidden;
+}
+.card-header{
+  display:flex;align-items:center;gap:10px;padding:16px 20px;
+}
+.card-title{font-size:14px;font-weight:600;color:var(--text-1);}
+.divider{height:1px;background:var(--divider);}
+.card-body{padding:18px 20px;}
+
+/* ============ Tables ============ */
+.table{width:100%;border-collapse:collapse;}
+.table th{
+  text-align:left;font-size:11.5px;font-weight:500;color:var(--text-3);
+  padding:0 20px;height:40px;white-space:nowrap;
+}
+.table td{padding:0 20px;height:48px;font-size:12.5px;vertical-align:middle;}
+.table tbody tr{border-top:1px solid var(--divider);}
+.table tbody tr:hover{background:rgba(255,255,255,0.02);}
+.table-row-lg td{height:58px;}
+.table-row-lg tbody tr{border-top:1px solid var(--divider);}
+
+/* status badge */
+.badge-sync{
+  display:inline-flex;padding:4px 9px;border-radius:var(--r-chip);font-size:11.5px;font-weight:500;
+}
+.badge-ok{background:rgba(52,211,153,0.10);color:var(--green);}
+.badge-syncing{background:rgba(56,189,248,0.10);color:var(--blue);}
+.badge-fail{background:rgba(248,113,113,0.10);color:var(--red);}
+.badge-idle{background:rgba(255,255,255,0.06);color:var(--text-2);}
+
+/* ============ Dashboard ============ */
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px;}
+.stat-card{
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--r-card);
+  padding:18px;display:flex;flex-direction:column;gap:12px;
+}
+.stat-label{font-size:13px;color:var(--text-2);display:flex;align-items:center;justify-content:space-between;}
+.stat-delta{font-size:10.5px;color:var(--green);background:rgba(52,211,153,0.08);padding:1px 6px;border-radius:4px;font-family:var(--font-en);}
+.stat-delta.blue{color:var(--type-blue);background:rgba(96,165,250,0.10);}
+.stat-delta.violet{color:var(--purple);background:rgba(165,180,252,0.10);}
+.stat-value{font-size:28px;font-weight:600;font-family:var(--font-en);color:var(--text-1);display:flex;align-items:baseline;gap:10px;}
+.stat-value .unit{font-size:13px;font-weight:500;color:var(--text-3);font-family:var(--font-cn);}
+.stat-unit{font-size:12px;color:var(--text-3);}
+.dash-row{display:grid;grid-template-columns:1fr 344px;gap:16px;margin-bottom:20px;}
+.dash-row-3{display:grid;grid-template-columns:1fr 344px;gap:16px;}
+.code-block{
+  background:var(--bg-code2);border:1px solid #1A212E;border-radius:10px;
+  padding:16px 18px;font-family:var(--font-mono);font-size:12px;line-height:1.8;overflow-x:auto;
+  color:var(--text-mid);
+}
+.code-block .cmt{color:var(--text-4);}
+.code-block .str{color:var(--green);}
+.code-block .key{color:var(--type-blue);}
+.code-block .fn{color:var(--purple);}
+.sync-list{display:flex;flex-direction:column;}
+.sync-item{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--divider);}
+.sync-item:last-child{border-bottom:none;}
+.sync-icon{width:32px;height:32px;border-radius:8px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:14px;}
+.sync-body{flex:1;min-width:0;}
+.sync-name{font-size:12.5px;font-weight:500;color:var(--text-1);}
+.sync-sub{font-size:11px;color:var(--text-3);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sync-time{font-size:11px;color:var(--text-4);white-space:nowrap;}
+.sync-sub .ok{color:var(--green);}
+.sync-sub .fail{color:var(--red);}
+.sync-sub .idx{color:var(--blue);}
+.dist-bar-row{display:flex;flex-direction:column;gap:6px;}
+.dist-label{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--text-2);}
+.dist-track{height:6px;background:#1F2735;border-radius:3px;overflow:hidden;}
+.dist-fill{height:100%;border-radius:3px;}
+.sys-row{display:flex;align-items:center;justify-content:space-between;height:36px;border-bottom:1px solid var(--divider);font-size:12.5px;}
+.sys-row:last-child{border-bottom:none;}
+.sys-label{color:var(--text-3);}
+.sys-value{color:var(--text-1);font-family:var(--font-en);}
+.sys-value .dot-inline{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green-strong);margin-right:5px;vertical-align:1px;}
+
+/* ============ Search & Filters ============ */
+.search-box{
+  display:flex;align-items:center;gap:8px;height:38px;width:280px;padding:0 12px;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--r-btn);
+}
+.search-box svg{width:14px;height:14px;stroke:var(--text-3);fill:none;stroke-width:2;stroke-linecap:round;}
+.search-box input{flex:1;font-size:12.5px;color:var(--text-1);}
+.search-box input::placeholder{color:var(--text-3);}
+.filter-chips{display:flex;align-items:center;gap:8px;}
+.chip-filter{
+  padding:5px 11px;border-radius:var(--r-chip);font-size:11.5px;color:var(--text-3);cursor:pointer;
+  transition:background .12s,color .12s;user-select:none;
+}
+.chip-filter.active{background:var(--bg-primary-dim);color:var(--primary-light);}
+.chip-filter:hover{color:var(--text-2);}
+
+/* ============ Breadcrumb ============ */
+.crumb{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text-3);margin-bottom:16px;}
+.crumb .sep{opacity:.6;}
+.crumb .cur{color:var(--text-2);font-weight:500;}
+.crumb span:not(.sep):not(.cur){cursor:pointer;}
+.crumb span:not(.sep):not(.cur):hover{color:var(--text-2);}
+
+/* ============ Info grid (library detail) ============ */
+.info-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px;}
+.info-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--r-card);padding:16px 18px;}
+.info-label{font-size:11.5px;color:var(--text-3);margin-bottom:6px;}
+.info-value{font-size:14px;font-weight:500;color:var(--text-1);}
+.info-value.mono{font-size:12.5px;font-family:var(--font-mono);color:var(--text-2);}
+.info-value .dot-inline{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green-strong);margin-right:6px;vertical-align:1px;}
+
+/* ============ Tabs ============ */
+.tabs{display:flex;gap:28px;border-bottom:1px solid var(--divider);margin-bottom:16px;}
+.tab-item{
+  position:relative;padding:0 2px 10px;font-size:13.5px;color:var(--text-3);cursor:pointer;
+  user-select:none;transition:color .12s;
+}
+.tab-item::after{
+  content:'';position:absolute;left:0;right:0;bottom:-1px;height:2px;border-radius:1px;
+  background:transparent;
+}
+.tab-item.active{color:var(--text-1);font-weight:600;}
+.tab-item.active::after{background:var(--primary);}
+
+/* ============ Props/Events table ============ */
+.prop-name{font-family:var(--font-mono);font-size:13px;font-weight:500;color:var(--text-1);}
+.prop-type{font-family:var(--font-mono);font-size:10px;color:var(--type-blue);}
+.prop-default{font-family:var(--font-mono);font-size:11px;color:var(--text-mid);}
+.prop-desc{font-size:12px;color:var(--text-2);}
+.prop-required{font-size:11px;color:var(--text-3);}
+
+/* ============ Examples ============ */
+.example-row{display:flex;align-items:center;gap:14px;padding:7px 0;}
+.example-label{width:56px;font-size:13px;font-weight:500;color:var(--text-2);flex-shrink:0;}
+.btn-demo{
+  height:34px;padding:0 16px;border-radius:8px;font-size:13px;font-weight:500;
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;
+  border:1px solid var(--border);color:var(--text-1);background:var(--bg-input);
+  transition:all .12s;white-space:nowrap;
+}
+.btn-demo.primary{background:var(--primary);border-color:var(--primary);color:#fff;box-shadow:var(--shadow-btn-sm);}
+.btn-demo.dashed{border-style:dashed;}
+.btn-demo.text{background:transparent;border-color:transparent;color:var(--primary-light);}
+.btn-demo.link{background:transparent;border-color:transparent;color:var(--primary-light);text-decoration:underline;}
+.btn-demo.small{height:28px;padding:0 12px;font-size:12px;}
+.btn-demo.large{height:42px;padding:0 20px;}
+.btn-demo:disabled{opacity:.45;cursor:not-allowed;}
+
+/* ============ MCP Debug ============ */
+.mcp-body{display:grid;grid-template-columns:420px 1fr;gap:16px;align-items:start;}
+.field{margin-bottom:14px;}
+.field-label{font-size:12px;font-weight:500;color:var(--text-mid);margin-bottom:8px;display:block;}
+.select-box{
+  display:flex;align-items:center;justify-content:space-between;height:38px;padding:0 12px;
+  background:var(--bg-card-2);border:1px solid var(--border-strong);border-radius:var(--r-btn);
+  font-family:var(--font-mono);font-size:12px;color:var(--text-mid);cursor:pointer;position:relative;
+}
+.select-box svg{width:16px;height:16px;stroke:var(--text-dim);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+.json-box{
+  background:var(--bg-code);border-radius:8px;padding:12px;font-family:var(--font-mono);
+  font-size:11px;line-height:1.7;color:var(--text-mid);min-height:88px;
+}
+.json-box .k{color:var(--purple);}
+.json-box .v{color:var(--green);}
+.hint-text{font-size:11px;color:var(--text-dim);margin-top:2px;}
+.resp-section{margin-bottom:16px;}
+.resp-label{font-size:12px;font-weight:600;color:var(--text-1);margin-bottom:8px;}
+.req-code{background:var(--bg-code);border-radius:8px;padding:12px 14px;font-family:var(--font-mono);font-size:11px;line-height:1.7;}
+.req-code .method{color:var(--green);}
+.req-code .dim{color:var(--text-mid);}
+.status-row{display:flex;align-items:center;gap:10px;margin-bottom:12px;}
+.ok-chip{padding:2px 8px;border-radius:var(--r-chip);font-size:11px;font-family:var(--font-mono);font-weight:500;color:var(--green-text);background:rgba(14,33,25,1);}
+.status-meta{font-size:11px;color:var(--text-dim);}
+.sum-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;}
+.sum-cell{background:var(--bg-card-2);border-radius:8px;padding:12px 14px;}
+.sum-value{font-size:18px;font-weight:600;font-family:var(--font-en);}
+.sum-label{font-size:11px;color:var(--text-dim);margin-top:4px;}
+.result-list{border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+.result-item{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--divider);}
+.result-item:last-child{border-bottom:none;}
+.result-name{font-family:var(--font-mono);font-size:12px;font-weight:500;color:var(--text-1);}
+.result-meta{font-size:11px;color:var(--text-dim);}
+
+/* ============ Tip banner ============ */
+.tip-banner{
+  display:flex;align-items:center;gap:10px;background:#1C1733;border:1px solid #403373;
+  border-radius:8px;padding:10px 14px;font-size:12px;color:var(--purple);margin-bottom:20px;
+}
+.tip-banner svg{width:16px;height:16px;stroke:var(--primary-light);fill:none;stroke-width:1.6;flex-shrink:0;}
+.tip-banner code{font-family:var(--font-mono);background:rgba(99,102,241,0.12);padding:1px 6px;border-radius:4px;font-size:11px;}
+
+/* ============ Logs ============ */
+.log-card{display:flex;flex-direction:column;height:calc(100vh - 180px);min-height:420px;}
+.log-toolbar{display:flex;align-items:center;gap:12px;padding:12px 16px;}
+.log-count{margin-left:auto;font-size:11px;color:#6B7280;}
+.log-list{
+  flex:1;background:var(--bg-code);padding:10px 16px;overflow-y:auto;
+  font-family:var(--font-mono);font-size:11px;
+}
+.log-line{display:flex;gap:12px;line-height:24px;white-space:nowrap;}
+.log-time{color:var(--blue);flex-shrink:0;}
+.log-time.warn{color:var(--yellow);}
+.log-time.error{color:var(--red);}
+.log-msg{color:var(--text-mid);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+/* ============ Modal ============ */
+.modal-backdrop{
+  position:fixed;inset:0;background:rgba(0,0,0,0.55);display:none;align-items:center;justify-content:center;z-index:100;
+}
+.modal-backdrop.open{display:flex;}
+.modal{
+  width:480px;background:#12151D;border:1px solid var(--border);border-radius:var(--r-lg);
+  box-shadow:var(--shadow-card);overflow:hidden;
+}
+.modal-header{padding:24px 28px 0;}
+.modal-title{font-size:18px;font-weight:600;color:var(--text-1);}
+.modal-sub{font-size:12.5px;color:var(--text-3);margin-top:6px;}
+.modal-body{padding:20px 28px;display:flex;flex-direction:column;gap:16px;}
+.modal-field label{display:block;font-size:12.5px;font-weight:500;color:var(--text-2);margin-bottom:8px;}
+.modal-input{
+  width:100%;height:42px;background:var(--bg-input);border:1px solid var(--border);
+  border-radius:var(--r-btn);padding:0 12px;font-size:13px;color:var(--text-1);
+}
+.modal-input:focus{border-color:var(--primary);}
+.modal-select{
+  width:100%;height:42px;background:var(--bg-input);border:1px solid var(--border);
+  border-radius:var(--r-btn);padding:0 12px;font-size:13px;color:var(--text-1);appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='%237A8090' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 12px center;
+}
+.modal-select option{background:#151A23;color:var(--text-1);}
+.modal-check{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-2);cursor:pointer;}
+.modal-check input{accent-color:var(--primary);width:14px;height:14px;}
+.modal-footer{display:flex;justify-content:flex-end;gap:10px;padding:0 28px 26px;}
+</style>
+</head>
+<body>
+
+<!-- ==================== LOGIN ==================== -->
+<div id="login-view">
+  <div class="login-glow glow-indigo"></div>
+  <div class="login-glow glow-violet"></div>
+  <div class="login-top-logo">
+    <div class="login-logo-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
+    </div>
+    <div>
+      <div class="login-logo-title">组件库 MCP</div>
+      <div class="login-logo-sub">COMPONENT LIBRARY SERVER</div>
+    </div>
+  </div>
+  <div class="login-card">
+    <div class="login-card-title">欢迎回来</div>
+    <div class="login-card-sub">登录组件库 MCP 服务器控制台，统一 Bearer Token 鉴权</div>
+    <div class="login-field">
+      <label for="login-user">用户名</label>
+      <input class="login-input" id="login-user" type="text" value="admin@mcp.local">
+    </div>
+    <div class="login-field" style="margin-top:16px;">
+      <label for="login-pass">密码</label>
+      <input class="login-input" id="login-pass" type="password" value="12345678" placeholder="••••••••••">
+    </div>
+    <div class="login-options">
+      <label class="remember"><span class="checkbox"><svg viewBox="0 0 10 10"><polyline points="1,5.2 3.8,8 9,2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>记住我</label>
+      <span class="login-forgot">忘记密码？</span>
+    </div>
+    <button class="login-btn" id="login-btn">登 录</button>
+    <div class="login-note">登录即代表接受《服务协议》与《隐私政策》</div>
+  </div>
+  <div class="login-copyright">Copyright 2026 Component Library MCP Server</div>
+  <div class="login-version">v2.4.1</div>
+</div>
+
+<!-- ==================== APP ==================== -->
+<div id="app">
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="logo-row">
+      <div class="logo-box">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
+      </div>
+      <div class="logo-text">
+        <div class="logo-title">组件库 MCP</div>
+        <div class="logo-sub">COMPONENT LIBRARY SERVER</div>
+      </div>
+    </div>
+    <nav class="nav" id="nav">
+      <div class="nav-item active" data-page="dashboard">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+        <span>仪表盘</span>
+      </div>
+      <div class="nav-item" data-page="libraries">
+        <svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>
+        <span>组件库</span>
+      </div>
+      <div class="nav-item" data-page="mcp">
+        <svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 15h10"/><path d="M7 9h10"/></svg>
+        <span>MCP 调试</span>
+      </div>
+      <div class="nav-item" data-page="keys">
+        <svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L21 2"/><path d="M17 6l3 3"/><path d="M14 9l2 2"/></svg>
+        <span>API Keys</span>
+      </div>
+      <div class="nav-item" data-page="users">
+        <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.5-5.5 6.5-5.5s5.7 2 6.5 5.5"/><circle cx="17.5" cy="9" r="2.5"/><path d="M16.5 14.8c2.6.3 4.4 2 5 5.2"/></svg>
+        <span>用户管理</span>
+      </div>
+      <div class="nav-item" data-page="logs">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg>
+        <span>日志</span>
+      </div>
+    </nav>
+    <div class="nav-spacer"></div>
+    <div class="user-card">
+      <div class="user-avatar">管</div>
+      <div class="user-text">
+        <div class="user-name">管理员</div>
+        <div class="user-meta">admin · 全部权限</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Content -->
+  <main class="content" id="content">
+
+    <!-- ============ DASHBOARD ============ -->
+    <section class="page active" id="page-dashboard">
+      <div class="page-header">
+        <div>
+          <h1>仪表盘</h1>
+          <div class="page-sub">组件库 MCP 服务器运行概览</div>
+        </div>
+        <div class="header-actions">
+          <div class="chip-status chip-green"><span class="dot"></span>服务运行中</div>
+          <button class="btn btn-ghost" id="btn-refresh">
+            <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+            刷新
+          </button>
+        </div>
+      </div>
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-label">组件库 <span class="stat-delta">+2 本周</span></div>
+          <div class="stat-value">8</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">已索引组件 <span class="stat-delta blue">+126 本周</span></div>
+          <div class="stat-value">1,284</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">API Keys <span class="stat-delta violet">3 已启用</span></div>
+          <div class="stat-value">6</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">用户 <span class="stat-delta">+1 本月</span></div>
+          <div class="stat-value">12</div>
+        </div>
+      </div>
+      <div class="dash-row">
+        <div class="card" style="padding:20px;">
+          <div class="card-header" style="padding:0 0 14px;">
+            <div class="card-title">MCP 接入说明</div>
+            <span style="flex:1"></span>
+            <span class="chip-method">标准 MCP 协议 · HTTP + Bearer Token 鉴权</span>
+          </div>
+          <div class="code-block">
+            <span class="cmt"># 方式一：本地开发（npx 启动）</span><br>
+            npx @mcp/components-server --transport http \<br>
+            &nbsp;&nbsp;--url http://localhost:8380/mcp \<br>
+            &nbsp;&nbsp;--header <span class="str">"Authorization: Bearer &lt;YOUR_API_KEY&gt;"</span><br>
+            <br>
+            <span class="cmt"># 方式二：Cursor 配置（mcp.json）</span><br>
+            { <span class="key">"mcpServers"</span>: { <span class="key">"components"</span>: {<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;<span class="key">"type"</span>: <span class="str">"http"</span>,<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;<span class="key">"url"</span>: <span class="str">"http://localhost:8380/mcp"</span>,<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;<span class="key">"headers"</span>: { <span class="key">"Authorization"</span>: <span class="str">"Bearer sk-mcp-****"</span> } } } }
+          </div>
+        </div>
+        <div class="card" style="padding:20px;height:296px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <div class="card-title">最近同步</div>
+            <span class="link-action" style="font-size:12px;">查看全部</span>
+          </div>
+          <div class="sync-list">
+            <div class="sync-item">
+              <div class="sync-icon" style="background:rgba(99,102,241,0.12);color:var(--primary-light);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/></svg>
+              </div>
+              <div class="sync-body">
+                <div class="sync-name">ant-design <span style="font-size:11px;color:var(--text-3);font-weight:400;">· 142 个组件</span></div>
+                <div class="sync-sub">提交 8f3a21c → <span class="ok">同步成功</span></div>
+              </div>
+              <div class="sync-time">2 分钟前</div>
+            </div>
+            <div class="sync-item">
+              <div class="sync-icon" style="background:rgba(96,165,250,0.12);color:var(--type-blue);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/></svg>
+              </div>
+              <div class="sync-body">
+                <div class="sync-name">element-plus <span style="font-size:11px;color:var(--text-3);font-weight:400;">· 118 个组件</span></div>
+                <div class="sync-sub">提交 c44b9ef → <span class="ok">同步成功</span></div>
+              </div>
+              <div class="sync-time">18 分钟前</div>
+            </div>
+            <div class="sync-item">
+              <div class="sync-icon" style="background:rgba(56,189,248,0.12);color:var(--blue);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+              </div>
+              <div class="sync-body">
+                <div class="sync-name">arco-design <span style="font-size:11px;color:var(--text-3);font-weight:400;">· 96 个组件</span></div>
+                <div class="sync-sub"><span class="idx">索引中… 已处理 82/96</span></div>
+              </div>
+              <div class="sync-time">26 分钟前</div>
+            </div>
+            <div class="sync-item">
+              <div class="sync-icon" style="background:rgba(248,113,113,0.12);color:var(--red);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+              </div>
+              <div class="sync-body">
+                <div class="sync-name">shadcn-ui <span style="font-size:11px;color:var(--text-3);font-weight:400;">· 0 个组件</span></div>
+                <div class="sync-sub"><span class="fail">同步失败 · 网络超时，请重试</span></div>
+              </div>
+              <div class="sync-time">1 小时前</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="dash-row-3">
+        <div class="card" style="padding:20px;height:204px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <div class="card-title">组件语言分布</div>
+            <span style="font-size:12px;color:var(--text-3);">1,284 个组件</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:14px;">
+            <div class="dist-bar-row">
+              <div class="dist-label"><span>React</span><span>62%</span></div>
+              <div class="dist-track"><div class="dist-fill" style="width:62%;background:var(--primary);"></div></div>
+            </div>
+            <div class="dist-bar-row">
+              <div class="dist-label"><span>Vue</span><span>23%</span></div>
+              <div class="dist-track"><div class="dist-fill" style="width:23%;background:var(--type-blue);"></div></div>
+            </div>
+            <div class="dist-bar-row">
+              <div class="dist-label"><span>Web Components</span><span>10%</span></div>
+              <div class="dist-track"><div class="dist-fill" style="width:10%;background:var(--violet);"></div></div>
+            </div>
+            <div class="dist-bar-row">
+              <div class="dist-label"><span>其他</span><span>5%</span></div>
+              <div class="dist-track"><div class="dist-fill" style="width:5%;background:var(--text-4);"></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="padding:20px;height:204px;">
+          <div class="card-title" style="margin-bottom:4px;">系统状态</div>
+          <div class="sys-row"><span class="sys-label">服务运行时长</span><span class="sys-value">8 天 3 小时</span></div>
+          <div class="sys-row"><span class="sys-label">MCP 端点</span><span class="sys-value"><span class="dot-inline"></span>online · :8380</span></div>
+          <div class="sys-row"><span class="sys-label">同步队列</span><span class="sys-value">0 个任务</span></div>
+          <div class="sys-row"><span class="sys-label">服务版本</span><span class="sys-value">v2.4.1</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ LIBRARIES ============ -->
+    <section class="page" id="page-libraries">
+      <div class="page-header">
+        <div>
+          <h1>组件库</h1>
+          <div class="page-sub">管理 Git 仓库，同步并索引组件供 MCP 客户端使用</div>
+        </div>
+        <div class="header-actions">
+          <div class="search-box">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            <input type="text" placeholder="搜索仓库名称…" id="lib-search">
+          </div>
+          <button class="btn btn-primary" id="btn-add-repo">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+            添加仓库
+          </button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header" style="padding:14px 20px;">
+          <span style="font-size:12.5px;color:var(--text-2);">共 <span id="lib-count">8</span> 个仓库</span>
+          <span style="flex:1"></span>
+          <div class="filter-chips" id="lib-filters">
+            <span class="chip-filter active" data-filter="all">全部</span>
+            <span class="chip-filter" data-filter="synced">已同步</span>
+            <span class="chip-filter" data-filter="syncing">同步中</span>
+            <span class="chip-filter" data-filter="failed">失败</span>
+          </div>
+        </div>
+        <div class="divider"></div>
+        <table class="table table-row-lg" id="lib-table">
+          <thead>
+            <tr>
+              <th style="width:340px;">仓库</th>
+              <th style="width:110px;">分支</th>
+              <th style="width:130px;">状态</th>
+              <th style="width:110px;">组件数</th>
+              <th style="width:200px;">最近同步</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ LIBRARY DETAIL ============ -->
+    <section class="page" id="page-library-detail">
+      <div class="crumb" id="lib-crumb">
+        <span data-nav="libraries">组件库</span><span class="sep">/</span><span id="lib-detail-name-crumb">ant-design</span>
+      </div>
+      <div class="page-header" style="margin-bottom:20px;">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <h1 id="lib-detail-title">ant-design</h1>
+          <span class="chip-version" id="lib-detail-branch">main</span>
+          <span class="chip-status chip-green" style="padding:4px 10px;font-size:11.5px;"><span class="dot" style="width:6px;height:6px;"></span>已同步</span>
+        </div>
+        <div class="header-actions">
+          <button class="btn btn-ghost">立即同步</button>
+          <button class="btn btn-ghost">仓库配置</button>
+        </div>
+      </div>
+      <div class="info-grid">
+        <div class="info-card"><div class="info-label">组件数</div><div class="info-value">142</div></div>
+        <div class="info-card"><div class="info-label">上游仓库</div><div class="info-value mono">github.com/ant-design/ant-design</div></div>
+        <div class="info-card"><div class="info-label">索引版本</div><div class="info-value mono">v5.17.4</div></div>
+        <div class="info-card"><div class="info-label">最近同步</div><div class="info-value" style="font-size:13px;"><span class="dot-inline"></span>2 分钟前</div></div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">已索引组件</div>
+          <span class="chip-count">142</span>
+          <span style="flex:1"></span>
+          <div class="search-box" style="width:220px;height:34px;">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            <input type="text" placeholder="搜索组件…">
+          </div>
+        </div>
+        <div class="divider"></div>
+        <div style="padding:8px 20px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--divider);">
+          <span class="chip-filter active">全部</span>
+          <span class="chip-filter">React</span>
+          <span class="chip-filter">Vue</span>
+          <span class="chip-filter">Web Components</span>
+        </div>
+        <table class="table" id="comp-table">
+          <thead>
+            <tr>
+              <th style="width:280px;">组件</th>
+              <th style="width:120px;">类型</th>
+              <th style="width:140px;">版本</th>
+              <th style="width:160px;">导出</th>
+              <th style="width:200px;">标签</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ COMPONENT DETAIL ============ -->
+    <section class="page" id="page-component-detail">
+      <div class="crumb">
+        <span data-nav="libraries">组件库</span><span class="sep">/</span><span data-nav="library-detail">ant-design</span><span class="sep">/</span><span class="cur">Button</span>
+      </div>
+      <div class="page-header" style="margin-bottom:16px;">
+        <div>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">
+            <h1>Button</h1>
+            <span class="chip-version">v5.17.4</span>
+            <span class="chip-type">React</span>
+          </div>
+          <div style="font-size:12.5px;color:var(--text-3);margin-bottom:4px;">通用按钮组件，支持多种形态、尺寸与交互状态</div>
+          <div style="font-size:11px;color:var(--text-4);">导出 Button · 路径 components/button · 更新于 3 天前</div>
+        </div>
+        <div class="header-actions">
+          <button class="btn btn-ghost">复制导入语句</button>
+          <button class="btn btn-ghost" style="background:var(--bg-hover);border-color:transparent;color:var(--primary-light);">查看源码</button>
+        </div>
+      </div>
+      <div class="tabs" id="comp-tabs">
+        <div class="tab-item" data-tab="docs">文档</div>
+        <div class="tab-item active" data-tab="props">Props</div>
+        <div class="tab-item" data-tab="events">Events</div>
+        <div class="tab-item" data-tab="slots">Slots</div>
+        <div class="tab-item" data-tab="examples">示例</div>
+      </div>
+
+      <!-- Props tab -->
+      <div class="tab-panel" id="panel-props" style="display:block;">
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-header">
+            <div class="card-title">Props 定义</div>
+            <span class="chip-count">9</span>
+          </div>
+          <div class="divider"></div>
+          <table class="table">
+            <thead>
+              <tr>
+                <th style="width:150px;">名称</th>
+                <th style="width:300px;">类型</th>
+                <th style="width:130px;">默认值</th>
+                <th style="width:70px;">必填</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody id="props-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Events tab -->
+      <div class="tab-panel" id="panel-events" style="display:none;">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Events 事件</div>
+            <span class="chip-count">4</span>
+          </div>
+          <div class="divider"></div>
+          <table class="table">
+            <thead>
+              <tr>
+                <th style="width:150px;">名称</th>
+                <th style="width:320px;">参数</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody id="events-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Slots tab -->
+      <div class="tab-panel" id="panel-slots" style="display:none;">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Slots 插槽</div>
+            <span class="chip-count">2</span>
+          </div>
+          <div class="divider"></div>
+          <table class="table">
+            <thead>
+              <tr>
+                <th style="width:150px;">名称</th>
+                <th style="width:320px;">类型</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody id="slots-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Docs tab -->
+      <div class="tab-panel" id="panel-docs" style="display:none;">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">文档 Docs</div>
+            <span class="chip-file">README.md</span>
+          </div>
+          <div class="divider"></div>
+          <div class="card-body" style="display:flex;flex-direction:column;gap:12px;">
+            <p style="font-size:13px;line-height:22px;color:var(--text-2);">MButton 是组件库内置的基础按钮组件，支持 primary / default / dashed / text / link 五种类型，small / medium / large 三种尺寸，适用于表单提交、页面跳转、危险操作确认等场景。</p>
+            <div style="font-size:13px;font-weight:600;color:var(--text-1);">安装</div>
+            <div class="code-block" style="padding:12px 16px;font-size:11px;border-radius:8px;"><span class="fn">npm install @mcp/component-library</span></div>
+            <div style="font-size:13px;font-weight:600;color:var(--text-1);">基本用法</div>
+            <div class="code-block" style="padding:12px 16px;font-size:11px;border-radius:8px;">
+              <span class="key">import</span> { MButton } <span class="key">from</span> <span class="str">'@mcp/components'</span>;<br>
+              &lt;MButton <span class="key">type</span>=<span class="str">'primary'</span> <span class="key">size</span>=<span class="str">'large'</span>&gt;提交订单&lt;/MButton&gt;
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Examples tab -->
+      <div class="tab-panel" id="panel-examples" style="display:none;">
+        <div class="card">
+          <div class="card-header"><div class="card-title">示例 Examples</div></div>
+          <div class="divider"></div>
+          <div class="card-body">
+            <div class="example-row">
+              <div class="example-label">类型</div>
+              <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                <button class="btn-demo primary">Primary</button>
+                <button class="btn-demo">Default</button>
+                <button class="btn-demo dashed">Dashed</button>
+                <button class="btn-demo text">Text</button>
+                <button class="btn-demo link">Link</button>
+              </div>
+            </div>
+            <div class="example-row">
+              <div class="example-label">尺寸</div>
+              <div style="display:flex;gap:10px;align-items:center;">
+                <button class="btn-demo small">Small</button>
+                <button class="btn-demo">Medium</button>
+                <button class="btn-demo large">Large</button>
+              </div>
+            </div>
+            <div class="example-row">
+              <div class="example-label">状态</div>
+              <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                <button class="btn-demo" disabled>Disabled</button>
+                <button class="btn-demo primary" disabled>Disabled Primary</button>
+                <button class="btn-demo" id="demo-loading" style="color:var(--text-3);">Loading…</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ MCP DEBUG ============ -->
+    <section class="page" id="page-mcp">
+      <div class="page-header">
+        <div>
+          <h1>MCP 调试</h1>
+          <div class="page-sub">在线调用后端 MCP 工具，验证组件库数据服务</div>
+        </div>
+        <div class="chip-status chip-green"><span class="dot"></span>已连接 · Bearer Token</div>
+      </div>
+      <div class="mcp-body">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">调用配置</div>
+            <span class="chip-method">POST /api/mcp/call</span>
+          </div>
+          <div class="divider"></div>
+          <div class="card-body">
+            <div class="field">
+              <label class="field-label">工具</label>
+              <div class="select-box">
+                <span>component_library.get_components</span>
+                <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+              </div>
+            </div>
+            <div class="field">
+              <label class="field-label">参数 JSON</label>
+              <div class="json-box" id="param-json">
+                <span class="k">libraryId</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="v">lib_7f3a</span><br>
+                <span class="k">query</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="v">button</span><br>
+                <span class="k">limit</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="v">20</span>
+              </div>
+              <div class="hint-text">参数以 JSON 格式发送，可通过编辑器内 Tools 面板引用变量</div>
+            </div>
+            <button class="btn btn-primary" style="width:100%;height:40px;font-size:14px;justify-content:center;" id="btn-send">发送请求</button>
+          </div>
+        </div>
+        <div class="card" id="mcp-result">
+          <div class="card-header"><div class="card-title">请求 / 响应</div></div>
+          <div class="divider"></div>
+          <div class="card-body">
+            <div class="resp-section">
+              <div class="resp-label">请求 Request</div>
+              <div class="req-code">
+                <span class="method">POST</span> <span class="dim">/api/mcp/call</span><br>
+                <span class="dim">Authorization: Bearer mcp_live_9f2c...</span><br>
+                <span class="dim">Content-Type: application/json</span>
+              </div>
+            </div>
+            <div class="resp-section">
+              <div class="resp-label">响应 Response</div>
+              <div class="status-row">
+                <span class="ok-chip">200 OK</span>
+                <span class="status-meta">342ms · 2026-08-31 11:18:42</span>
+              </div>
+              <div class="sum-row">
+                <div class="sum-cell"><div class="sum-value" style="color:var(--text-1);">42</div><div class="sum-label">匹配总数</div></div>
+                <div class="sum-cell"><div class="sum-value" style="color:var(--purple);">12</div><div class="sum-label">本次命中</div></div>
+                <div class="sum-cell"><div class="sum-value" style="color:var(--green);">342ms</div><div class="sum-label">响应耗时</div></div>
+              </div>
+              <div class="result-list">
+                <div class="result-item">
+                  <span class="result-name">MButton</span>
+                  <span class="result-meta">v1.2.0 · 命中 button</span>
+                </div>
+                <div class="result-item">
+                  <span class="result-name">MInput</span>
+                  <span class="result-meta">v0.9.1 · 命中 input</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ API KEYS ============ -->
+    <section class="page" id="page-keys">
+      <div class="page-header">
+        <div>
+          <h1>API Keys</h1>
+          <div class="page-sub">管理 MCP 客户端访问凭据（Bearer Token）</div>
+        </div>
+        <button class="btn btn-primary" id="btn-create-key">+ 创建 Key</button>
+      </div>
+      <div class="tip-banner">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+        <span>在 Cursor 等 MCP 客户端中配置：Authorization: Bearer <code>mcp_live_xxxxxxxx</code>，即可访问组件库索引、搜索与元数据接口</span>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">API Keys</div>
+          <span class="chip-count">6</span>
+        </div>
+        <div class="divider"></div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th style="width:180px;">名称</th>
+              <th style="width:280px;">Secret</th>
+              <th style="width:120px;">权限</th>
+              <th style="width:150px;">最近使用</th>
+              <th style="width:100px;">状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="keys-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ USERS ============ -->
+    <section class="page" id="page-users">
+      <div class="page-header">
+        <div>
+          <h1>用户管理</h1>
+          <div class="page-sub">管理后台账号：增删改、重置密码、切换 admin / user 角色</div>
+        </div>
+        <button class="btn btn-primary" id="btn-add-user">+ 添加用户</button>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">用户列表</div>
+          <span class="chip-count">12</span>
+        </div>
+        <div class="divider"></div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th style="width:220px;">用户</th>
+              <th style="width:240px;">邮箱</th>
+              <th style="width:120px;">角色</th>
+              <th style="width:100px;">状态</th>
+              <th style="width:160px;">创建时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="users-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ LOGS ============ -->
+    <section class="page" id="page-logs">
+      <div class="page-header">
+        <div>
+          <h1>日志</h1>
+          <div class="page-sub">服务端运行日志（MCP Server · 索引器 · 鉴权）</div>
+        </div>
+        <button class="btn btn-ghost btn-ghost-sm" id="btn-clear-logs">
+          <svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/></svg>
+          清空日志
+        </button>
+      </div>
+      <div class="card log-card">
+        <div class="log-toolbar">
+          <div class="filter-chips" id="log-filters">
+            <span class="chip-filter active" data-level="all">全部</span>
+            <span class="chip-filter" data-level="INFO">INFO</span>
+            <span class="chip-filter" data-level="WARN">WARN</span>
+            <span class="chip-filter" data-level="ERROR">ERROR</span>
+          </div>
+          <span class="log-count">共 <span id="log-total">12,847</span> 条</span>
+        </div>
+        <div class="divider"></div>
+        <div class="log-list" id="log-list"></div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ==================== MODAL: ADD REPO ==================== -->
+<div class="modal-backdrop" id="modal-add-repo">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">添加 Git 仓库</div>
+      <div class="modal-sub">从 Git 仓库拉取源码并索引组件，供 MCP 客户端查询</div>
+    </div>
+    <div class="modal-body">
+      <div class="modal-field">
+        <label>仓库地址</label>
+        <input class="modal-input" type="text" value="https://github.com/ant-design/ant-design.git" id="repo-url">
+      </div>
+      <div class="modal-field">
+        <label>默认分支</label>
+        <input class="modal-input" type="text" value="main" id="repo-branch">
+      </div>
+      <div class="modal-field">
+        <label>索引深度</label>
+        <select class="modal-select" id="repo-depth">
+          <option selected>完整索引（含历史版本）</option>
+          <option>仅最新版本</option>
+        </select>
+      </div>
+      <label class="modal-check"><input type="checkbox" checked> 添加后立即触发同步</label>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="modal-cancel">取消</button>
+      <button class="btn btn-primary" id="modal-confirm">添加并同步</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============ Data ============ */
+const LIBRARIES = [
+  {id:'lib_7f3a', name:'ant-design', repo:'github.com/ant-design', branch:'main', status:'synced', count:142, time:'2 分钟前', commit:'8f3a21c'},
+  {id:'lib_9c2e', name:'element-plus', repo:'github.com/element-plus', branch:'main', status:'synced', count:118, time:'18 分钟前', commit:'c44b9ef'},
+  {id:'lib_4b1d', name:'arco-design', repo:'github.com/arco-design', branch:'release', status:'syncing', count:96, time:'26 分钟前', commit:'82/96'},
+  {id:'lib_8f7c', name:'shadcn-ui', repo:'github.com/shadcn-ui', branch:'main', status:'failed', count:0, time:'1 小时前', commit:'网络超时'},
+  {id:'lib_2a6e', name:'antd-mobile', repo:'github.com/ant-design/antd-mobile', branch:'master', status:'synced', count:74, time:'3 小时前', commit:'5f2b81c'},
+  {id:'lib_6c3b', name:'vant', repo:'github.com/youzan/vant', branch:'main', status:'synced', count:88, time:'昨天', commit:'a91d2e4'},
+  {id:'lib_1e9d', name:'naive-ui', repo:'github.com/tusen-ai/naive-ui', branch:'main', status:'synced', count:107, time:'2 天前', commit:'3c7a9f0'},
+  {id:'lib_5d0a', name:'material-ui', repo:'github.com/mui/material-ui', branch:'master', status:'idle', count:0, time:'未同步', commit:'—'},
+];
+
+const COMPONENTS = [
+  {name:'Button', desc:'通用按钮组件', type:'React', version:'v5.17.4', tags:['通用','表单']},
+  {name:'Input', desc:'输入框组件', type:'React', version:'v5.17.4', tags:['表单','受控']},
+  {name:'Select', desc:'选择器组件', type:'React', version:'v5.17.4', tags:['表单']},
+  {name:'Modal', desc:'弹窗组件', type:'React', version:'v5.17.2', tags:['反馈','覆盖']},
+  {name:'Table', desc:'表格组件', type:'React', version:'v5.17.4', tags:['数据展示']},
+  {name:'DatePicker', desc:'日期选择器', type:'React', version:'v5.17.0', tags:['表单']},
+  {name:'Tag', desc:'标签组件', type:'Vue', version:'v3.0.1', tags:['数据展示']},
+  {name:'Card', desc:'卡片容器', type:'Vue', version:'v3.0.1', tags:['布局']},
+];
+
+const PROPS = [
+  {name:'type', type:'"primary"|"default"|"dashed"|"text"|"link"', def:'"default"', req:'—', desc:'按钮类型'},
+  {name:'size', type:'"small"|"medium"|"large"', def:'"medium"', req:'—', desc:'按钮尺寸'},
+  {name:'disabled', type:'boolean', def:'false', req:'—', desc:'是否禁用'},
+  {name:'loading', type:'boolean', def:'false', req:'—', desc:'加载中状态'},
+  {name:'block', type:'boolean', def:'false', req:'—', desc:'块级按钮'},
+  {name:'icon', type:'ReactNode', def:'—', req:'—', desc:'图标内容'},
+  {name:'href', type:'string', def:'—', req:'—', desc:'链接地址，设置后渲染为 <a>'},
+  {name:'onClick', type:'(e: MouseEvent) => void', def:'—', req:'—', desc:'点击回调'},
+  {name:'children', type:'ReactNode', def:'—', req:'✓', desc:'按钮内容'},
+];
+
+const EVENTS = [
+  {name:'onClick', param:'(event: MouseEvent) => void', desc:'点击按钮时触发'},
+  {name:'onDoubleClick', param:'(event: MouseEvent) => void', desc:'双击按钮时触发'},
+  {name:'onMouseEnter', param:'(event: MouseEvent) => void', desc:'鼠标移入时触发'},
+  {name:'onMouseLeave', param:'(event: MouseEvent) => void', desc:'鼠标移出时触发'},
+];
+
+const SLOTS = [
+  {name:'default', param:'ReactNode', desc:'默认插槽，渲染按钮内容'},
+  {name:'icon', param:'ReactNode', desc:'图标插槽'},
+];
+
+const KEYS = [
+  {name:'cursor-primary', secret:'mcp_live_9f2c****7a3e', scope:'read, write', used:'2 分钟前', active:true},
+  {name:'cursor-secondary', secret:'mcp_live_8d1e****2b9c', scope:'read', used:'26 分钟前', active:true},
+  {name:'ci-cd', secret:'mcp_live_7a4f****5c1d', scope:'read, write', used:'3 小时前', active:true},
+  {name:'dev-local', secret:'mcp_live_6b3a****9e2f', scope:'read', used:'昨天', active:false},
+  {name:'legacy-token', secret:'mcp_live_5c2b****1a8e', scope:'read', used:'3 天前', active:false},
+  {name:'trial-user', secret:'mcp_live_4d1c****3f7d', scope:'read', used:'5 天前', active:false},
+];
+
+const USERS = [
+  {avatar:'管', name:'admin', email:'admin@mcp.local', role:'admin', status:true, created:'2025-01-15'},
+  {avatar:'张', name:'zhangsan', email:'zhangsan@mcp.local', role:'user', status:true, created:'2025-03-02'},
+  {avatar:'李', name:'lisi', email:'lisi@mcp.local', role:'user', status:true, created:'2025-04-18'},
+  {avatar:'王', name:'wangwu', email:'wangwu@mcp.local', role:'user', status:false, created:'2025-06-30'},
+  {avatar:'赵', name:'zhaoliu', email:'zhaoliu@mcp.local', role:'user', status:true, created:'2025-08-11'},
+];
+
+const LOGS = [
+  {time:'[11:18:42.318]', level:'INFO', msg:'mcp-server  收到 MCP 请求 tools/call，tool=get_components'},
+  {time:'[11:18:42.322]', level:'INFO', msg:'mcp-server  校验 Bearer Token 通过 (key: mcp_live_9f2c)'},
+  {time:'[11:18:42.401]', level:'INFO', msg:'indexer  查询组件索引 query=button，命中 12 条'},
+  {time:'[11:18:42.410]', level:'INFO', msg:'http  200 POST /api/mcp/call 342ms'},
+  {time:'[11:17:03.887]', level:'WARN', msg:'indexer  组件 MSelect 元数据缺失示例文件'},
+  {time:'[11:16:55.120]', level:'INFO', msg:'sync  开始同步仓库 git@github.com:acme/ui.git'},
+  {time:'[11:16:52.204]', level:'INFO', msg:'sync  仓库同步完成，新增 6 个组件，更新 3 个'},
+  {time:'[11:15:30.556]', level:'ERROR', msg:'auth  无效 Bearer Token 已拒绝 (ip: 172.18.0.9)'},
+  {time:'[11:15:30.558]', level:'WARN', msg:'auth  连续 3 次鉴权失败，已记录来源 IP'},
+  {time:'[11:14:02.771]', level:'INFO', msg:'api  管理员 admin 创建 API Key cursor-secondary'},
+  {time:'[11:13:44.090]', level:'INFO', msg:'api  用户 zhangsan 登录成功 (role=user)'},
+  {time:'[11:12:10.045]', level:'INFO', msg:'indexer  组件库 lib_7f3a 索引构建完成 (42 components)'},
+];
+
+/* ============ Helpers ============ */
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const STATUS_META = {
+  synced:{cls:'badge-ok', label:'已同步'},
+  syncing:{cls:'badge-syncing', label:'同步中'},
+  failed:{cls:'badge-fail', label:'失败'},
+  idle:{cls:'badge-idle', label:'未同步'},
+};
+
+/* ============ Router ============ */
+const NAV_PAGES = ['dashboard','libraries','mcp','keys','users','logs'];
+function showPage(name){
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-'+name)?.classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.page === name));
+  document.getElementById('content').scrollTop = 0;
+}
+$('#nav').addEventListener('click', e => {
+  const item = e.target.closest('.nav-item');
+  if(item) showPage(item.dataset.page);
+});
+document.addEventListener('click', e => {
+  const crumb = e.target.closest('[data-nav]');
+  if(crumb) showPage(crumb.dataset.nav);
+});
+
+/* ============ Login ============ */
+function enterApp(){
+  $('#login-view').style.display = 'none';
+  $('#app').style.display = 'block';
+}
+$('#login-btn').addEventListener('click', () => enterApp());
+document.querySelectorAll('#login-view input').forEach(i => {
+  i.addEventListener('keydown', e => { if(e.key === 'Enter') enterApp(); });
+});
+
+/* Hash-based deep links: open file://.../index.html#libraries to skip login */
+const HASH_PAGES = [...NAV_PAGES, 'library-detail', 'component-detail'];
+if(location.hash){
+  enterApp();
+  const target = location.hash.slice(1).split('/')[0];
+  if(HASH_PAGES.includes(target)) showPage(target);
+  else if(target === 'library') showPage('libraries');
+}
+window.addEventListener('hashchange', () => {
+  const target = location.hash.slice(1).split('/')[0];
+  if(HASH_PAGES.includes(target)) showPage(target);
+});
+
+/* ============ Libraries table ============ */
+function renderLibs(filter='all', keyword=''){
+  const tbody = $('#lib-table tbody');
+  const rows = LIBRARIES.filter(l =>
+    (filter==='all' || l.status===filter) &&
+    (!keyword || l.name.toLowerCase().includes(keyword.toLowerCase()) || l.repo.includes(keyword))
+  );
+  tbody.innerHTML = rows.map(l => `
+    <tr data-id="${l.id}">
+      <td>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:30px;height:30px;border-radius:8px;background:${l.status==='failed'?'rgba(248,113,113,0.10)':'rgba(99,102,241,0.08)'};display:flex;align-items:center;justify-content:center;flex-shrink:0;color:${l.status==='failed'?'var(--red)':'var(--primary-light)'};">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/></svg>
+          </div>
+          <div>
+            <div style="font-size:13px;font-weight:500;color:var(--text-1);">${l.name}</div>
+            <div style="font-size:11px;color:var(--text-3);">${l.repo}</div>
+          </div>
+        </div>
+      </td>
+      <td><span class="mono" style="font-size:12px;color:var(--text-2);">${l.branch}</span></td>
+      <td><span class="badge-sync ${STATUS_META[l.status].cls}">${STATUS_META[l.status].label}</span></td>
+      <td style="font-size:12.5px;font-family:var(--font-en);color:var(--text-mid);">${l.count}</td>
+      <td style="font-size:12px;color:var(--text-2);">${l.time}</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:16px;">
+          <span class="link-action" data-act="detail">详情</span>
+          <span class="link-action muted" data-act="sync">同步</span>
+        </div>
+      </td>
+    </tr>`).join('');
+  $('#lib-count').textContent = LIBRARIES.length;
+}
+$('#lib-table tbody').addEventListener('click', e => {
+  const act = e.target.closest('[data-act]');
+  if(!act) return;
+  const id = act.closest('tr').dataset.id;
+  if(act.dataset.act === 'detail'){
+    openLibraryDetail(id);
+  } else if(act.dataset.act === 'sync'){
+    const lib = LIBRARIES.find(l => l.id === id);
+    act.textContent = '同步中…';
+    act.style.pointerEvents = 'none';
+    setTimeout(() => {
+      lib.status = 'synced'; lib.time = '刚刚'; lib.count = lib.count || 96;
+      renderLibs(currentLibFilter, $('#lib-search').value);
+    }, 900);
+  }
+});
+let currentLibFilter = 'all';
+$('#lib-filters').addEventListener('click', e => {
+  const chip = e.target.closest('.chip-filter');
+  if(!chip) return;
+  $('#lib-filters .chip-filter').forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+  currentLibFilter = chip.dataset.filter;
+  renderLibs(currentLibFilter, $('#lib-search').value);
+});
+$('#lib-search').addEventListener('input', e => renderLibs(currentLibFilter, e.target.value));
+
+/* ============ Library Detail ============ */
+function openLibraryDetail(id){
+  const lib = LIBRARIES.find(l => l.id === id) || LIBRARIES[0];
+  $('#lib-detail-name-crumb').textContent = lib.name;
+  $('#lib-detail-title').textContent = lib.name;
+  $('#lib-detail-branch').textContent = lib.branch;
+  renderComps();
+  showPage('library-detail');
+}
+function renderComps(){
+  $('#comp-table tbody').innerHTML = COMPONENTS.map(c => `
+    <tr data-comp="${c.name}">
+      <td>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:30px;height:30px;border-radius:8px;background:rgba(99,102,241,0.08);display:flex;align-items:center;justify-content:center;color:var(--primary-light);flex-shrink:0;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </div>
+          <div>
+            <div style="font-size:13px;font-weight:500;color:var(--text-1);">${c.name}</div>
+            <div style="font-size:11px;color:var(--text-3);">${c.desc}</div>
+          </div>
+        </div>
+      </td>
+      <td><span class="chip-type">${c.type}</span></td>
+      <td><span class="mono" style="font-size:11px;color:var(--text-2);">${c.version}</span></td>
+      <td><span class="mono" style="font-size:11.5px;color:var(--text-2);">${c.name}</span></td>
+      <td>
+        <div style="display:flex;gap:6px;">
+          ${c.tags.map(t => `<span class="chip-tag">${t}</span>`).join('')}
+        </div>
+      </td>
+      <td><span class="link-action">详情</span></td>
+    </tr>`).join('');
+}
+$('#comp-table tbody').addEventListener('click', e => {
+  const row = e.target.closest('tr[data-comp]');
+  if(row) showPage('component-detail');
+});
+
+/* ============ Component Detail tabs ============ */
+const TAB_PANELS = {docs:'panel-docs', props:'panel-props', events:'panel-events', slots:'panel-slots', examples:'panel-examples'};
+$('#comp-tabs').addEventListener('click', e => {
+  const tab = e.target.closest('.tab-item');
+  if(!tab) return;
+  $('#comp-tabs .tab-item').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  Object.entries(TAB_PANELS).forEach(([k, id]) => {
+    document.getElementById(id).style.display = k === tab.dataset.tab ? 'block' : 'none';
+  });
+});
+function renderTables(){
+  $('#props-tbody').innerHTML = PROPS.map(p => `
+    <tr>
+      <td><span class="prop-name">${p.name}</span></td>
+      <td><span class="prop-type">${esc(p.type)}</span></td>
+      <td><span class="prop-default">${esc(p.def)}</span></td>
+      <td><span class="prop-required">${p.req}</span></td>
+      <td><span class="prop-desc">${p.desc}</span></td>
+    </tr>`).join('');
+  $('#events-tbody').innerHTML = EVENTS.map(ev => `
+    <tr>
+      <td><span class="mono" style="font-size:12px;color:var(--text-1);">${ev.name}</span></td>
+      <td><span class="mono" style="font-size:10px;color:var(--purple);">${esc(ev.param)}</span></td>
+      <td><span style="font-size:11px;color:var(--text-2);">${ev.desc}</span></td>
+    </tr>`).join('');
+  $('#slots-tbody').innerHTML = SLOTS.map(s => `
+    <tr>
+      <td><span class="mono" style="font-size:12px;color:var(--text-1);">${s.name}</span></td>
+      <td><span class="mono" style="font-size:10px;color:var(--purple);">${s.param}</span></td>
+      <td><span style="font-size:11px;color:var(--text-2);">${s.desc}</span></td>
+    </tr>`).join('');
+}
+
+/* ============ MCP Debug ============ */
+$('#btn-send').addEventListener('click', () => {
+  const btn = $('#btn-send');
+  btn.textContent = '请求中…';
+  btn.style.opacity = .7;
+  setTimeout(() => {
+    btn.textContent = '发送请求';
+    btn.style.opacity = 1;
+    const card = $('#mcp-result');
+    card.style.outline = '1px solid rgba(52,211,153,0.4)';
+    setTimeout(() => card.style.outline = 'none', 600);
+  }, 600);
+});
+
+/* ============ API Keys ============ */
+function renderKeys(){
+  $('#keys-tbody').innerHTML = KEYS.map(k => `
+    <tr>
+      <td><span class="mono" style="font-size:12px;font-weight:500;color:var(--text-1);">${k.name}</span></td>
+      <td><span class="mono" style="font-size:11px;color:var(--text-mid);">${k.secret}</span></td>
+      <td style="font-size:11px;color:var(--text-2);">${k.scope}</td>
+      <td style="font-size:11px;color:var(--text-2);">${k.used}</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span class="dot" style="width:6px;height:6px;${k.active?'':'background:var(--text-4);'}"></span>
+          <span style="font-size:11px;color:${k.active?'var(--green-text)':'var(--text-3)'};">${k.active?'活跃':'已吊销'}</span>
+        </div>
+      </td>
+      <td>
+        <div style="display:flex;gap:16px;">
+          <span class="link-action" data-act="copy">复制</span>
+          <span class="link-action danger" data-act="revoke">吊销</span>
+        </div>
+      </td>
+    </tr>`).join('');
+}
+$('#keys-tbody').addEventListener('click', e => {
+  const act = e.target.closest('[data-act]');
+  if(!act) return;
+  if(act.dataset.act === 'copy'){
+    const row = act.closest('tr');
+    const secret = row.querySelector('td:nth-child(2)').textContent;
+    navigator.clipboard?.writeText(secret).catch(()=>{});
+    act.textContent = '已复制';
+    setTimeout(() => act.textContent = '复制', 1200);
+  } else if(act.dataset.act === 'revoke'){
+    const row = act.closest('tr');
+    const name = row.querySelector('td:nth-child(1)').textContent;
+    const key = KEYS.find(k => k.name === name);
+    if(key){ key.active = false; key.used = '刚刚'; renderKeys(); }
+  }
+});
+
+/* ============ Users ============ */
+function renderUsers(){
+  $('#users-tbody').innerHTML = USERS.map(u => `
+    <tr>
+      <td>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div class="user-avatar" style="width:28px;height:28px;font-size:12px;border-radius:50%;">${u.avatar}</div>
+          <span style="font-size:12px;font-weight:500;color:var(--text-1);font-family:var(--font-en);">${u.name}</span>
+        </div>
+      </td>
+      <td style="font-size:11px;color:var(--text-2);font-family:var(--font-en);">${u.email}</td>
+      <td><span class="chip-role">${u.role}</span></td>
+      <td>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span class="dot" style="width:6px;height:6px;${u.status?'':'background:var(--text-4);'}"></span>
+          <span style="font-size:11px;color:${u.status?'var(--green-text)':'var(--text-3)'};">${u.status?'活跃':'停用'}</span>
+        </div>
+      </td>
+      <td style="font-size:11px;color:var(--text-2);font-family:var(--font-mono);">${u.created}</td>
+      <td>
+        <div style="display:flex;gap:16px;">
+          <span class="link-action">编辑</span>
+          <span class="link-action muted">改密</span>
+          <span class="link-action danger">删除</span>
+        </div>
+      </td>
+    </tr>`).join('');
+}
+
+/* ============ Logs ============ */
+function renderLogs(level='all'){
+  const list = LOGS.filter(l => level==='all' || l.level===level);
+  $('#log-list').innerHTML = list.map(l => `
+    <div class="log-line" data-level="${l.level}">
+      <span class="log-time ${l.level==='WARN'?'warn':l.level==='ERROR'?'error':''}">${l.time}</span>
+      <span class="log-msg">${esc(l.msg)}</span>
+    </div>`).join('');
+  $('#log-total').textContent = '12,847';
+}
+$('#log-filters').addEventListener('click', e => {
+  const chip = e.target.closest('.chip-filter');
+  if(!chip) return;
+  $('#log-filters .chip-filter').forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+  renderLogs(chip.dataset.level);
+});
+$('#btn-clear-logs').addEventListener('click', () => {
+  $('#log-list').innerHTML = '';
+  $('#log-total').textContent = '0';
+  setTimeout(() => { renderLogs('all'); $('#log-filters .chip-filter').forEach(c => c.classList.remove('active')); $('#log-filters .chip-filter[data-level="all"]').classList.add('active'); }, 1500);
+});
+
+/* ============ Modal ============ */
+const modal = $('#modal-add-repo');
+$('#btn-add-repo').addEventListener('click', () => modal.classList.add('open'));
+$('#modal-cancel').addEventListener('click', () => modal.classList.remove('open'));
+modal.addEventListener('click', e => { if(e.target === modal) modal.classList.remove('open'); });
+$('#modal-confirm').addEventListener('click', () => {
+  const url = $('#repo-url').value.trim();
+  const branch = $('#repo-branch').value.trim() || 'main';
+  const name = url.split('/').pop().replace(/\.git$/,'');
+  if(name && !LIBRARIES.find(l => l.name === name)){
+    LIBRARIES.push({id:'lib_'+Math.random().toString(16).slice(2,6), name, repo:url.replace('https://',''), branch, status:'syncing', count:0, time:'刚刚', commit:'0/…'});
+    renderLibs(currentLibFilter, $('#lib-search').value);
+  }
+  modal.classList.remove('open');
+  showPage('libraries');
+});
+
+/* ============ Demo interactions ============ */
+$('#btn-refresh').addEventListener('click', e => {
+  const btn = e.currentTarget;
+  btn.style.opacity = .6;
+  setTimeout(() => {
+    btn.style.opacity = 1;
+    const chip = document.querySelector('#page-dashboard .chip-green');
+    chip.style.outline = '1px solid rgba(52,211,153,0.4)';
+    setTimeout(() => chip.style.outline = 'none', 600);
+  }, 600);
+});
+document.querySelectorAll('.btn-demo').forEach(b => {
+  b.addEventListener('click', () => {
+    const orig = b.textContent;
+    b.textContent = '点击 ✓';
+    setTimeout(() => b.textContent = orig, 900);
+  });
+});
+document.getElementById('demo-loading').addEventListener('click', () => {
+  const b = document.getElementById('demo-loading');
+  b.textContent = 'Loading…';
+  setTimeout(() => b.textContent = 'Loaded', 1500);
+});
+
+/* ============ Toast (轻量反馈) ============ */
+let toastTimer;
+function toast(msg){
+  clearTimeout(toastTimer);
+  let el = document.getElementById('toast');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'toast';
+    Object.assign(el.style, {
+      position:'fixed', left:'50%', top:'80px', transform:'translateX(-50%)',
+      background:'#1F2735', border:'1px solid #3D4A66', borderRadius:'8px',
+      padding:'10px 16px', fontSize:'12.5px', color:'#E8EAF0', zIndex:200,
+      boxShadow:'0 12px 32px -8px rgba(0,0,0,0.6)', opacity:0, transition:'opacity .2s',
+      pointerEvents:'none', fontFamily:'var(--font-cn)',
+    });
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  requestAnimationFrame(() => el.style.opacity = 1);
+  toastTimer = setTimeout(() => el.style.opacity = 0, 1800);
+}
+
+/* ============ Dashboard extras ============ */
+document.querySelectorAll('#page-dashboard .link-action').forEach(a => {
+  a.addEventListener('click', () => showPage('libraries'));
+});
+
+/* ============ Library Detail extras ============ */
+let currentCompFilter = 'all';
+document.querySelectorAll('#page-library-detail .chip-filter').forEach(c => {
+  c.addEventListener('click', () => {
+    document.querySelectorAll('#page-library-detail .chip-filter').forEach(x => x.classList.remove('active'));
+    c.classList.add('active');
+    currentCompFilter = c.textContent.trim();
+    const tbody = document.querySelector('#comp-table tbody');
+    [...tbody.querySelectorAll('tr')].forEach(tr => {
+      const type = tr.querySelector('.chip-type')?.textContent.trim();
+      tr.style.display = (currentCompFilter === '全部' || type === currentCompFilter) ? '' : 'none';
+    });
+  });
+});
+document.querySelectorAll('#page-library-detail .btn-ghost').forEach((b, i) => {
+  b.addEventListener('click', () => toast(i === 0 ? '已触发同步任务' : '仓库配置已打开'));
+});
+$('#comp-table tbody').addEventListener('click', e => {
+  if(e.target.closest('tr[data-comp]')) showPage('component-detail');
+});
+
+/* ============ Component Detail extras ============ */
+const compCopyBtns = document.querySelectorAll('#page-component-detail .btn-ghost');
+if(compCopyBtns[0]) compCopyBtns[0].addEventListener('click', () => {
+  const stmt = "import { Button } from 'antd';";
+  navigator.clipboard?.writeText(stmt).catch(()=>{});
+  toast('导入语句已复制到剪贴板');
+});
+if(compCopyBtns[1]) compCopyBtns[1].addEventListener('click', () => {
+  toast('已在编辑器中打开源码 components/button.tsx');
+});
+
+/* ============ API Keys extras ============ */
+const createKeyBtn = document.getElementById('btn-create-key');
+if(createKeyBtn) createKeyBtn.addEventListener('click', () => toast('创建 Key 流程已开启（演示）'));
+
+/* ============ Users extras ============ */
+const addUserBtn = document.getElementById('btn-add-user');
+if(addUserBtn) addUserBtn.addEventListener('click', () => toast('添加用户流程已开启（演示）'));
+document.querySelectorAll('#page-users .link-action').forEach(a => {
+  a.addEventListener('click', () => toast(`${a.textContent}功能演示中`));
+});
+
+/* ============ Init ============ */
+renderLibs();
+renderComps();
+renderTables();
+renderKeys();
+renderUsers();
+renderLogs();
+</script>
+</body>
+</html>

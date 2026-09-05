@@ -1,0 +1,87 @@
+use std::path::PathBuf;
+
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub host: String,
+    pub port: u16,
+    pub database_url: String,
+    pub data_dir: PathBuf,
+    pub repos_dir: PathBuf,
+    pub admin_api_key: Option<String>,
+    pub admin_username: String,
+    pub admin_password: Option<String>,
+    /// OpenAI-compatible API key for AI ingest / enrich
+    pub llm_api_key: Option<String>,
+    pub llm_base_url: String,
+    pub llm_model: String,
+}
+
+impl Config {
+    pub fn from_env() -> Self {
+        let data_dir = resolve_data_dir();
+        let _ = std::fs::create_dir_all(&data_dir);
+
+        let database_url = std::env::var("COMPIRA_DATABASE_URL")
+            .unwrap_or_else(|_| data_dir.join("compira.db").to_string_lossy().into());
+
+        let repos_dir = data_dir.join("repos");
+
+        Self {
+            host: std::env::var("COMPIRA_HOST").unwrap_or_else(|_| "0.0.0.0".into()),
+            port: std::env::var("COMPIRA_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(8080),
+            database_url,
+            data_dir,
+            repos_dir,
+            admin_api_key: std::env::var("COMPIRA_ADMIN_API_KEY").ok(),
+            admin_username: std::env::var("COMPIRA_ADMIN_USERNAME")
+                .unwrap_or_else(|_| "admin".into()),
+            admin_password: std::env::var("COMPIRA_ADMIN_PASSWORD").ok(),
+            llm_api_key: std::env::var("COMPIRA_LLM_API_KEY")
+                .ok()
+                .or_else(|| std::env::var("OPENAI_API_KEY").ok()),
+            llm_base_url: std::env::var("COMPIRA_LLM_BASE_URL")
+                .unwrap_or_else(|_| "https://api.openai.com/v1".into()),
+            llm_model: std::env::var("COMPIRA_LLM_MODEL")
+                .unwrap_or_else(|_| "gpt-4o-mini".into()),
+        }
+    }
+
+    pub fn llm_enabled(&self) -> bool {
+        self.llm_api_key
+            .as_ref()
+            .is_some_and(|k| !k.trim().is_empty())
+    }
+}
+
+/// Resolve data dir to an absolute path. Avoid `canonicalize` on Windows so we
+/// don't introduce `\\?\` prefixes that break libgit2.
+fn resolve_data_dir() -> PathBuf {
+    let raw = std::env::var("COMPIRA_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("./data"));
+
+    let absolute = if raw.is_absolute() {
+        raw
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(raw)
+    };
+
+    #[cfg(windows)]
+    {
+        let s = absolute.to_string_lossy();
+        if s.chars().any(|c| !c.is_ascii()) {
+            tracing::warn!(
+                "COMPIRA_DATA_DIR contains non-ASCII characters ({s}). \
+                 libgit2 on Windows may fail cloning repos; set COMPIRA_DATA_DIR to an ASCII path \
+                 (e.g. C:\\compira-data)."
+            );
+        }
+    }
+
+    absolute
+}

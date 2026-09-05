@@ -1,0 +1,23 @@
+services:
+  compira-mcp:
+    # Local build (default). For published images:
+    #   image: ghcr.io/clockclock1/compira-mcp:latest
+    #   and comment out `build:`.
+    image: compira-mcp:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - compira-data:/app/data
+    environment:
+      COMPIRA_HOST: "0.0.0.0"
+      COMPIRA_PORT: "8080"
+      COMPIRA_DATA_DIR: /app/data
+      COMPIRA_STATIC_DIR: /app/static
+      RUST_LOG: info,compira_mcp=debug
+    restart: unless-stopped
+
+volumes:
+  compira-data:

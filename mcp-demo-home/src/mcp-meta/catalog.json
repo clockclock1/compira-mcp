@@ -1,0 +1,187 @@
+{
+  "rules": {
+    "component_count": 5,
+    "library_id": "8d4aca4c-51e6-4a9b-b837-3fca1cbb8532",
+    "name": "Demo UI 示例组件",
+    "rules": "prefer:Cmp",
+    "status": "ready"
+  },
+  "components": [
+    {
+      "id": "7ed51537-eec9-487e-86a5-00f48f013c75",
+      "name": "CmpCard",
+      "props": [
+        {
+          "default": null,
+          "description": null,
+          "name": "shadow",
+          "required": false,
+          "type": "'always' | 'hover' | 'never'"
+        },
+        {
+          "default": null,
+          "description": null,
+          "name": "title",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "events": [],
+      "slots": [
+        {
+          "description": "Default slot",
+          "name": "default"
+        },
+        {
+          "description": null,
+          "name": "footer"
+        },
+        {
+          "description": null,
+          "name": "header"
+        }
+      ],
+      "description": "卡片容器"
+    },
+    {
+      "id": "3006b7c6-8476-4f74-9f50-d9ba139f4223",
+      "name": "CmpTag",
+      "props": [
+        {
+          "default": null,
+          "description": null,
+          "name": "closable",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": null,
+          "description": null,
+          "name": "type",
+          "required": false,
+          "type": "'primary' | 'success' | 'warning' | 'danger' | 'info'"
+        }
+      ],
+      "events": [],
+      "slots": [
+        {
+          "description": "Default slot",
+          "name": "default"
+        }
+      ],
+      "description": "标签 Tag"
+    },
+    {
+      "id": "d4a6dccc-6ef8-43aa-985c-fa222ce93757",
+      "name": "CmpButton",
+      "props": [
+        {
+          "default": null,
+          "description": null,
+          "name": "disabled",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": null,
+          "description": null,
+          "name": "label",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": null,
+          "description": null,
+          "name": "size",
+          "required": false,
+          "type": "'small' | 'medium' | 'large'"
+        },
+        {
+          "default": null,
+          "description": null,
+          "name": "type",
+          "required": false,
+          "type": "'primary' | 'success' | 'warning' | 'danger' | 'default'"
+        }
+      ],
+      "events": [],
+      "slots": [
+        {
+          "description": "Default slot",
+          "name": "default"
+        }
+      ],
+      "description": "基础按钮 — 支持类型与尺寸"
+    },
+    {
+      "id": "f2b25b1f-f5f6-4c6b-9e13-aea9d703c423",
+      "name": "CmpInput",
+      "props": [
+        {
+          "default": null,
+          "description": null,
+          "name": "clearable",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": null,
+          "description": null,
+          "name": "maxlength",
+          "required": false,
+          "type": "number"
+        },
+        {
+          "default": null,
+          "description": null,
+          "name": "placeholder",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "events": [],
+      "slots": [
+        {
+          "description": "Default slot",
+          "name": "default"
+        }
+      ],
+      "description": "输入框 — 双向绑定 v-model"
+    },
+    {
+      "id": "cceeafc9-a3b9-4dce-9bef-a783c867c976",
+      "name": "CmpSwitch",
+      "props": [
+        {
+          "default": null,
+          "description": null,
+          "name": "activeText",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": null,
+          "description": null,
+          "name": "disabled",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": null,
+          "description": null,
+          "name": "inactiveText",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "events": [],
+      "slots": [
+        {
+          "description": "Default slot",
+          "name": "default"
+        }
+      ],
+      "description": "开关 Switch"
+    }
+  ]
+}

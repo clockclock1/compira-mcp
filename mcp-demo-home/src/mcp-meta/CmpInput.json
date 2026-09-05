@@ -1,0 +1,49 @@
+{
+  "meta": {
+    "description": "输入框 — 双向绑定 v-model",
+    "events": [],
+    "file_path": "uploads/CmpInput.vue",
+    "framework": "vue",
+    "id": "f2b25b1f-f5f6-4c6b-9e13-aea9d703c423",
+    "library_id": "8d4aca4c-51e6-4a9b-b837-3fca1cbb8532",
+    "name": "CmpInput",
+    "props": [
+      {
+        "default": null,
+        "description": null,
+        "name": "clearable",
+        "required": false,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "description": null,
+        "name": "maxlength",
+        "required": false,
+        "type": "number"
+      },
+      {
+        "default": null,
+        "description": null,
+        "name": "placeholder",
+        "required": false,
+        "type": "string"
+      }
+    ],
+    "slots": [
+      {
+        "description": "Default slot",
+        "name": "default"
+      }
+    ],
+    "tags": [
+      "vue",
+      "template",
+      "v-model"
+    ]
+  },
+  "docs": {
+    "docs": ""
+  },
+  "examples": []
+}
