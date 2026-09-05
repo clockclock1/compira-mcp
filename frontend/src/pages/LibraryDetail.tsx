@@ -1,6 +1,7 @@
 import { Link, useParams } from "react-router-dom";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, Component, Library } from "../api/client";
+import AlertBanner from "../components/AlertBanner";
 
 export default function LibraryDetail() {
   const { id } = useParams<{ id: string }>();
@@ -16,6 +17,9 @@ export default function LibraryDetail() {
   const [files, setFiles] = useState<FileList | null>(null);
   const [useAi, setUseAi] = useState(true);
   const [fetchPrompt, setFetchPrompt] = useState("");
+  const alertRef = useRef<HTMLDivElement>(null);
+  const watchedTasks = useRef<Set<string>>(new Set());
+  const seenFailedTasks = useRef<Set<string>>(new Set());
 
   const load = useCallback(() => {
     if (!id) return;
@@ -36,12 +40,29 @@ export default function LibraryDetail() {
     if (!id) return;
     const interval = setInterval(() => {
       api.tasks.list(id).then((tasks) => {
+        for (const t of tasks) {
+          if (t.status === "running" || t.status === "pending") {
+            watchedTasks.current.add(t.id);
+          }
+        }
+        for (const t of tasks) {
+          if (t.status !== "failed") continue;
+          if (!watchedTasks.current.has(t.id) || seenFailedTasks.current.has(t.id)) continue;
+          seenFailedTasks.current.add(t.id);
+          setError(t.message || "任务失败");
+        }
         const running = tasks.some((t) => t.status === "running" || t.status === "pending");
         if (!running) load();
       }).catch(() => {});
     }, 2500);
     return () => clearInterval(interval);
   }, [id, load]);
+
+  useEffect(() => {
+    if (error || (library?.status === "error" && library.last_error)) {
+      alertRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [error, library?.status, library?.last_error]);
 
   const frameworks = useMemo(() => {
     const set = new Set(components.map((c) => c.framework).filter(Boolean));
@@ -92,11 +113,14 @@ export default function LibraryDetail() {
     e.preventDefault();
     if (!id) return;
     if (!fetchPrompt.trim()) {
-      setError("请填写自然语言需求描述");
+      setError("请填写需求描述或仓库地址");
       return;
     }
-    if (!aiEnabled) {
-      setError("AI 拉取需先在「系统设置」配置 LLM API Key");
+    const looksLikeRepoOnly =
+      /https?:\/\/(www\.)?(github|gitlab|gitee)\.com\//i.test(fetchPrompt) &&
+      !/(按钮|button|tag|input|card|switch|组件名)/i.test(fetchPrompt.replace(/https?:\/\/\S+/gi, ""));
+    if (!aiEnabled && !looksLikeRepoOnly) {
+      setError("按组件 AI 拉取需先在「系统设置」配置 LLM；仅贴仓库地址可直接整库导入");
       return;
     }
     setBusy(true);
@@ -133,7 +157,16 @@ export default function LibraryDetail() {
           <span className="chip-tag">
             {sourceType === "upload" ? "上传" : sourceType === "fetch" ? "AI 拉取" : "Git"}
           </span>
-          <span className="chip-status chip-green" style={{ padding: "4px 10px", fontSize: 11.5 }}>
+          <span
+            className="chip-status"
+            style={{
+              padding: "4px 10px",
+              fontSize: 11.5,
+              ...(library?.status === "error"
+                ? { background: "rgba(248,113,113,0.12)", color: "var(--red)", border: "1px solid rgba(248,113,113,0.35)" }
+                : {}),
+            }}
+          >
             <span className="dot" style={{ width: 6, height: 6 }} />
             {statusOk ? "已同步" : library?.status || "-"}
           </span>
@@ -153,8 +186,14 @@ export default function LibraryDetail() {
         </div>
       </div>
 
-      {error && <p className="error">{error}</p>}
-
+      <div ref={alertRef}>
+        {error && (
+          <AlertBanner title="操作失败" message={error} onClose={() => setError("")} />
+        )}
+        {!error && library?.status === "error" && library.last_error && (
+          <AlertBanner title="此组件库上次操作失败" message={library.last_error} />
+        )}
+      </div>
       {!aiEnabled && (
         <div className="tip-banner">
           <svg viewBox="0 0 24 24">
@@ -346,25 +385,25 @@ export default function LibraryDetail() {
       <div className={`modal-backdrop${showFetch ? " open" : ""}`} onClick={() => setShowFetch(false)}>
         <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 520 }}>
           <div className="modal-header">
-            <div className="modal-title">AI 拉取</div>
-            <div className="modal-sub">只用自然语言描述，AI 会定位、下载并解析组件</div>
+            <div className="modal-title">AI 拉取 / 整库导入</div>
+            <div className="modal-sub">
+              指定组件用 AI 定位；只贴仓库地址则克隆并批量导入全部组件
+            </div>
           </div>
           <form onSubmit={handleFetch}>
             <div className="modal-body">
               <div className="modal-field">
-                <label>需求描述</label>
+                <label>需求描述或仓库地址</label>
                 <textarea
                   className="modal-input"
                   required
                   value={fetchPrompt}
                   onChange={(e) => setFetchPrompt(e.target.value)}
-                  placeholder="例如：从 Element Plus 拉取 Button 按钮组件的 Vue 源码"
+                  placeholder="例如：https://github.com/owner/repo 或「从 Element Plus 拉 Button」"
                   style={{ minHeight: 100 }}
                 />
                 <div className="hint-text" style={{ marginTop: 6 }}>
-                  {aiEnabled
-                    ? "将调用 LLM 规划 raw 下载地址，下载后自动解析入库"
-                    : "需先在「系统设置」配置 LLM"}
+                  整库导入扫描 .vue/.uvue/.tsx/.jsx（可不配 LLM）；按组件拉取需配置 LLM
                 </div>
               </div>
             </div>
@@ -372,8 +411,8 @@ export default function LibraryDetail() {
               <button type="button" className="btn btn-ghost" onClick={() => setShowFetch(false)}>
                 取消
               </button>
-              <button type="submit" className="btn btn-primary" disabled={busy || !aiEnabled}>
-                {busy ? "拉取中…" : "开始 AI 拉取"}
+              <button type="submit" className="btn btn-primary" disabled={busy}>
+                {busy ? "处理中…" : "开始"}
               </button>
             </div>
           </form>

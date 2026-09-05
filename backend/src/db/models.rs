@@ -14,6 +14,9 @@ pub struct Library {
     /// git | upload | fetch
     #[serde(default = "default_source_type")]
     pub source_type: String,
+    /// Last sync/ingest/fetch failure message (cleared on success)
+    #[serde(default)]
+    pub last_error: Option<String>,
     pub last_synced_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }

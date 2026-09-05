@@ -127,7 +127,7 @@ fn fallback_library_name(names: &[String], files: &[String]) -> String {
         .to_string()
 }
 
-/// Pure AI fetch: natural-language prompt → LLM plans URLs → download → parse (+ AI enrich).
+/// Pure AI fetch: natural-language / repo URL → download or clone → parse (+ optional AI enrich).
 pub async fn fetch_and_ingest(
     db: &Database,
     config: &Config,
@@ -138,18 +138,39 @@ pub async fn fetch_and_ingest(
     prompt: &str,
     auto_name: bool,
 ) -> anyhow::Result<usize> {
-    let llm = db.get_llm_settings(config)?;
-    if !llm.enabled() {
-        anyhow::bail!("AI fetch requires LLM API key (configure in admin settings)");
-    }
     let prompt = prompt.trim();
     if prompt.is_empty() {
         anyhow::bail!("prompt is required for AI fetch");
     }
 
     db.update_library_status(library_id, "syncing", None)?;
-    db.update_sync_task(task_id, 5, "AI planning component files...", None)?;
+    db.update_sync_task(task_id, 5, "Analyzing request...", None)?;
 
+    // Fast path: user pasted only a repo URL (or URL + 全部) → clone entire repo (LLM optional)
+    if let Some((repo_url, branch, whole)) = ai::detect_repo_intent(prompt) {
+        if whole {
+            let llm = db.get_llm_settings(config).ok();
+            return ingest_whole_repo(
+                db,
+                task_id,
+                library_id,
+                local_path,
+                library_name,
+                &repo_url,
+                &branch,
+                auto_name,
+                llm.as_ref(),
+            )
+            .await;
+        }
+    }
+
+    let llm = db.get_llm_settings(config)?;
+    if !llm.enabled() {
+        anyhow::bail!("AI fetch requires LLM API key (configure in admin settings)");
+    }
+
+    db.update_sync_task(task_id, 8, "AI planning component files...", None)?;
     let plan = ai::plan_fetch_urls(&llm, prompt).await?;
     if let Some(note) = &plan.note {
         let _ = db.log("info", &format!("AI fetch plan: {note}"), Some(library_id));
@@ -169,6 +190,39 @@ pub async fn fetch_and_ingest(
         }
     }
 
+    if plan.mode == "repo" || plan.whole_repo {
+        let repo_url = plan
+            .repo_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("AI requested repo mode but repo_url is empty"))?;
+        let branch = plan
+            .branch
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("main");
+        return ingest_whole_repo(
+            db,
+            task_id,
+            library_id,
+            local_path,
+            &resolved_name,
+            repo_url,
+            branch,
+            false,
+            Some(&llm),
+        )
+        .await;
+    }
+
+    let _ = db.log(
+        "info",
+        &format!("AI fetch urls ({}): {}", plan.urls.len(), plan.urls.join(" , ")),
+        Some(library_id),
+    );
+
     db.update_sync_task(
         task_id,
         20,
@@ -179,7 +233,6 @@ pub async fn fetch_and_ingest(
     let written = fetcher::download_urls(&plan.urls, local_path).await?;
 
     db.update_sync_task(task_id, 40, "Download complete, AI parsing...", None)?;
-    // auto_name already applied from plan; don't rename again during ingest
     ingest_files(
         db,
         Some(config),
@@ -192,6 +245,86 @@ pub async fn fetch_and_ingest(
         false,
     )
     .await
+}
+
+async fn ingest_whole_repo(
+    db: &Database,
+    task_id: &str,
+    library_id: &str,
+    local_path: &Path,
+    library_name: &str,
+    repo_url: &str,
+    branch: &str,
+    auto_name: bool,
+    llm: Option<&LlmSettings>,
+) -> anyhow::Result<usize> {
+    db.update_sync_task(
+        task_id,
+        15,
+        &format!("Cloning whole repository {repo_url} ({branch})..."),
+        None,
+    )?;
+    let _ = db.log(
+        "info",
+        &format!("Whole-repo import: {repo_url}@{branch}"),
+        Some(library_id),
+    );
+
+    let used_branch = git::clone_or_pull_try_branches(repo_url, branch, local_path)?;
+    {
+        let conn_err = (|| -> anyhow::Result<()> {
+            if let Some(mut lib) = db.get_library(library_id)? {
+                lib.repo_url = repo_url.to_string();
+                lib.branch = used_branch.clone();
+                db.update_library(&lib)?;
+            }
+            Ok(())
+        })();
+        if let Err(e) = conn_err {
+            tracing::warn!("failed to update library repo_url: {e}");
+        }
+    }
+
+    db.update_sync_task(task_id, 40, "Scanning all component files...", None)?;
+    let parsed = parser::scan_and_parse_directory(library_id, local_path)?;
+    if parsed.is_empty() {
+        anyhow::bail!(
+            "仓库已克隆，但未找到可解析的组件文件（.vue/.uvue/.tsx/.jsx）。分支={used_branch}"
+        );
+    }
+
+    let mut display_name = library_name.to_string();
+    if auto_name {
+        let names: Vec<String> = parsed.iter().map(|(c, _, _, _)| c.name.clone()).collect();
+        let suggested = if let Some(settings) = llm.filter(|s| s.enabled()) {
+            db.update_sync_task(task_id, 45, "AI naming library...", None)?;
+            match ai::suggest_library_name(settings, &names, &[]).await {
+                Ok(n) => n,
+                Err(_) => names
+                    .first()
+                    .map(|n| format!("{n} 等 {} 个组件", names.len()))
+                    .unwrap_or_else(|| "Git 组件库".into()),
+            }
+        } else {
+            names
+                .first()
+                .map(|n| format!("{n} 等 {} 个组件", names.len()))
+                .unwrap_or_else(|| "Git 组件库".into())
+        };
+        let _ = db.update_library_name(library_id, &suggested);
+        display_name = suggested;
+    }
+
+    db.update_sync_task(
+        task_id,
+        55,
+        &format!(
+            "Indexing {} components (bulk, no per-file AI enrich)...",
+            parsed.len()
+        ),
+        None,
+    )?;
+    store_parsed(db, task_id, library_id, &display_name, parsed, None).await
 }
 
 async fn store_parsed(

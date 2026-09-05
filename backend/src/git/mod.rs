@@ -14,6 +14,37 @@ pub fn clone_or_pull(repo_url: &str, branch: &str, local_path: &Path) -> anyhow:
     }
 }
 
+/// Try preferred branch then common defaults (main/master/dev).
+pub fn clone_or_pull_try_branches(
+    repo_url: &str,
+    preferred_branch: &str,
+    local_path: &Path,
+) -> anyhow::Result<String> {
+    let mut tried = Vec::new();
+    let mut branches = vec![preferred_branch.to_string()];
+    for b in ["main", "master", "dev"] {
+        if !branches.iter().any(|x| x == b) {
+            branches.push(b.to_string());
+        }
+    }
+    let mut last_err = None;
+    for branch in branches {
+        tried.push(branch.clone());
+        match clone_or_pull(repo_url, &branch, local_path) {
+            Ok(()) => return Ok(branch),
+            Err(e) => {
+                tracing::warn!("clone/pull {repo_url}@{branch} failed: {e}");
+                last_err = Some(e);
+                if local_path.exists() {
+                    let _ = std::fs::remove_dir_all(local_path);
+                }
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("clone failed")))
+        .map_err(|e| anyhow::anyhow!("clone failed for branches [{}]: {e}", tried.join(",")))
+}
+
 fn clone(repo_url: &str, branch: &str, local_path: &Path) -> anyhow::Result<()> {
     if let Some(parent) = local_path.parent() {
         std::fs::create_dir_all(parent)?;

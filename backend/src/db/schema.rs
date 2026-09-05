@@ -120,6 +120,10 @@ pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE libraries ADD COLUMN source_type TEXT NOT NULL DEFAULT 'git'",
         [],
     );
+    let _ = conn.execute(
+        "ALTER TABLE libraries ADD COLUMN last_error TEXT",
+        [],
+    );
     let _ = conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,

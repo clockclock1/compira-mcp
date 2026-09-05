@@ -280,11 +280,20 @@ async fn fetch_components(
             .into_response();
     }
 
-    if !state.db.get_llm_settings(state.config.as_ref()).map(|s| s.enabled()).unwrap_or(false) {
+    let whole_repo = crate::ai::detect_repo_intent(&req.prompt)
+        .map(|(_, _, whole)| whole)
+        .unwrap_or(false);
+    if !whole_repo
+        && !state
+            .db
+            .get_llm_settings(state.config.as_ref())
+            .map(|s| s.enabled())
+            .unwrap_or(false)
+    {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
-                "error": "AI fetch requires LLM API key — configure in 系统设置"
+                "error": "AI fetch requires LLM API key — configure in 系统设置（仅粘贴仓库地址整库导入时可不用 LLM）"
             })),
         )
             .into_response();

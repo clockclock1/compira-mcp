@@ -64,14 +64,10 @@ impl TaskManager {
             .await;
 
             if let Err(e) = result {
-                let _ = db.update_sync_task(
-                    &task_id,
-                    0,
-                    &format!("Sync failed: {e}"),
-                    Some("failed"),
-                );
-                let _ = db.update_library_status(&lib_id, "error", None);
-                let _ = db.log("error", &format!("Sync failed: {e}"), Some(&lib_id));
+                let msg = format!("Sync failed: {e}");
+                let _ = db.update_sync_task(&task_id, 0, &msg, Some("failed"));
+                let _ = db.set_library_error(&lib_id, &msg);
+                let _ = db.log("error", &msg, Some(&lib_id));
             }
         });
 
@@ -117,14 +113,10 @@ impl TaskManager {
             .await;
 
             if let Err(e) = result {
-                let _ = db.update_sync_task(
-                    &task_id,
-                    0,
-                    &format!("Ingest failed: {e}"),
-                    Some("failed"),
-                );
-                let _ = db.update_library_status(&lib_id, "error", None);
-                let _ = db.log("error", &format!("Ingest failed: {e}"), Some(&lib_id));
+                let msg = format!("Ingest failed: {e}");
+                let _ = db.update_sync_task(&task_id, 0, &msg, Some("failed"));
+                let _ = db.set_library_error(&lib_id, &msg);
+                let _ = db.log("error", &msg, Some(&lib_id));
             }
         });
 
@@ -142,11 +134,14 @@ impl TaskManager {
             .get_library(&library_id)?
             .ok_or_else(|| anyhow::anyhow!("Library not found"))?;
 
-        if !self.db.get_llm_settings(self.config.as_ref())?.enabled() {
-            anyhow::bail!("AI fetch requires LLM API key (configure in admin settings)");
-        }
         if prompt.trim().is_empty() {
             anyhow::bail!("prompt is required");
+        }
+        let whole_repo = crate::ai::detect_repo_intent(&prompt)
+            .map(|(_, _, whole)| whole)
+            .unwrap_or(false);
+        if !whole_repo && !self.db.get_llm_settings(self.config.as_ref())?.enabled() {
+            anyhow::bail!("AI fetch requires LLM API key (configure in admin settings)");
         }
 
         let task = self.db.create_sync_task(&library_id)?;
@@ -175,14 +170,10 @@ impl TaskManager {
             .await;
 
             if let Err(e) = result {
-                let _ = db.update_sync_task(
-                    &task_id,
-                    0,
-                    &format!("AI fetch failed: {e}"),
-                    Some("failed"),
-                );
-                let _ = db.update_library_status(&lib_id, "error", None);
-                let _ = db.log("error", &format!("AI fetch failed: {e}"), Some(&lib_id));
+                let msg = format!("AI fetch failed: {e}");
+                let _ = db.update_sync_task(&task_id, 0, &msg, Some("failed"));
+                let _ = db.set_library_error(&lib_id, &msg);
+                let _ = db.log("error", &msg, Some(&lib_id));
             }
         });
 

@@ -1,6 +1,7 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, Library, SyncTask } from "../api/client";
+import AlertBanner from "../components/AlertBanner";
 
 type Filter = "all" | "synced" | "syncing" | "failed";
 type CreateMode = "git" | "upload" | "fetch";
@@ -56,11 +57,20 @@ export default function Libraries() {
     use_ai: true,
   });
   const [files, setFiles] = useState<FileList | null>(null);
+  const alertRef = useRef<HTMLDivElement>(null);
+  const seenFailedTasks = useRef<Set<string>>(new Set());
+  const watchedTasks = useRef<Set<string>>(new Set());
+  const libNameById = useRef<Record<string, string>>({});
 
   const load = useCallback(() => {
     api.libraries
       .list()
-      .then(setLibraries)
+      .then((list) => {
+        setLibraries(list);
+        const map: Record<string, string> = {};
+        for (const l of list) map[l.id] = l.name;
+        libNameById.current = map;
+      })
       .catch((e) => setError(e.message));
   }, []);
 
@@ -76,14 +86,36 @@ export default function Libraries() {
         .then((allTasks) => {
           const running = allTasks.filter((t) => t.status === "running" || t.status === "pending");
           const map: Record<string, SyncTask> = {};
-          for (const t of running) map[t.library_id] = t;
+          for (const t of running) {
+            map[t.library_id] = t;
+            watchedTasks.current.add(t.id);
+          }
           setTasks(map);
+
+          for (const t of allTasks) {
+            if (t.status !== "failed") continue;
+            if (!watchedTasks.current.has(t.id) || seenFailedTasks.current.has(t.id)) continue;
+            seenFailedTasks.current.add(t.id);
+            const libName = libNameById.current[t.library_id];
+            const prefix = libName ? `「${libName}」` : "任务";
+            setError(`${prefix}失败：${t.message || "未知错误"}`);
+          }
+
           if (running.length === 0) load();
         })
         .catch(() => {});
     }, 2000);
     return () => clearInterval(interval);
   }, [load]);
+
+  useEffect(() => {
+    if (error) alertRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [error]);
+
+  const failedLibs = useMemo(
+    () => libraries.filter((l) => l.status === "error" && l.last_error),
+    [libraries],
+  );
 
   const filtered = useMemo(() => {
     return libraries.filter((l) => {
@@ -138,11 +170,15 @@ export default function Libraries() {
           await api.libraries.upload(lib.id, Array.from(files), form.use_ai, autoName);
         }
       } else {
-        if (!aiEnabled) {
-          throw new Error("AI 拉取需先在「系统设置」配置 LLM API Key");
-        }
         if (!form.prompt.trim()) {
-          throw new Error("请填写自然语言需求描述");
+          throw new Error("请填写需求描述或仓库地址");
+        }
+        const prompt = form.prompt.trim();
+        const repoOnly =
+          /https?:\/\/(www\.)?(github|gitlab|gitee)\.com\//i.test(prompt) &&
+          prompt.replace(/https?:\/\/\S+/gi, "").trim().length < 2;
+        if (!aiEnabled && !repoOnly) {
+          throw new Error("按组件 AI 拉取需配置 LLM；仅贴仓库地址可整库导入");
         }
         const autoName = !form.name.trim();
         const lib = await api.libraries.create({
@@ -151,7 +187,7 @@ export default function Libraries() {
           rules: form.rules || undefined,
         });
         await api.libraries.fetch(lib.id, {
-          prompt: form.prompt.trim(),
+          prompt,
           auto_name: autoName,
         });
       }
@@ -221,7 +257,39 @@ export default function Libraries() {
         </div>
       </div>
 
-      {error && <p className="error">{error}</p>}
+      <div ref={alertRef}>
+        {error && (
+          <AlertBanner title="操作失败" message={error} onClose={() => setError("")} />
+        )}
+        {!error && failedLibs.length > 0 && (
+          <div className="alert-banner alert-error" role="alert">
+            <div className="alert-banner-icon" aria-hidden>
+              <svg viewBox="0 0 24 24" width="20" height="20">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 8v5" />
+                <path d="M12 16h.01" />
+              </svg>
+            </div>
+            <div className="alert-banner-body">
+              <div className="alert-banner-title">
+                {failedLibs.length} 个组件库同步/入库失败
+              </div>
+              <ul className="alert-banner-list">
+                {failedLibs.map((lib) => (
+                  <li key={lib.id}>
+                    <div className="lib-name">
+                      <Link to={`/libraries/${lib.id}`} className="link-action">
+                        {lib.name}
+                      </Link>
+                    </div>
+                    <div className="lib-err">{lib.last_error}</div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
+      </div>
 
       <div className="card">
         <div className="card-header" style={{ padding: "14px 20px" }}>
@@ -314,12 +382,37 @@ export default function Libraries() {
                       {statusBadge(lib.status, task)}
                       {task && (
                         <div>
-                          <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 4 }}>
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: task.status === "failed" ? "var(--red)" : "var(--text-3)",
+                              marginTop: 4,
+                              maxWidth: 220,
+                              wordBreak: "break-word",
+                            }}
+                            title={task.message}
+                          >
                             {task.message}
                           </div>
-                          <div className="progress-bar">
-                            <div className="progress-bar-fill" style={{ width: `${task.progress}%` }} />
-                          </div>
+                          {task.status !== "failed" && (
+                            <div className="progress-bar">
+                              <div className="progress-bar-fill" style={{ width: `${task.progress}%` }} />
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {!task && lib.status === "error" && lib.last_error && (
+                        <div
+                          style={{
+                            fontSize: 11,
+                            color: "var(--red)",
+                            marginTop: 4,
+                            maxWidth: 220,
+                            wordBreak: "break-word",
+                          }}
+                          title={lib.last_error}
+                        >
+                          {lib.last_error}
                         </div>
                       )}
                     </td>
@@ -440,13 +533,13 @@ export default function Libraries() {
                     required
                     value={form.prompt}
                     onChange={(e) => setForm({ ...form, prompt: e.target.value })}
-                    placeholder="例如：从 Element Plus 拉取 Button 按钮组件的 Vue 源码及相关类型定义"
+                    placeholder="例如：从 Element Plus 拉取 Button；或只贴仓库地址 https://github.com/xxx/yyy 整库导入"
                     style={{ minHeight: 100 }}
                   />
                   <div className="hint-text" style={{ marginTop: 6 }}>
-                    AI 会自行定位可下载的 raw 文件地址，下载后解析并补全文档；名称留空时由 AI
-                    一并命名
-                    {!aiEnabled && "（请先在「系统设置」配置 LLM）"}
+                    指定组件时由 AI 定位 raw 文件；若只给仓库地址（或加「全部组件」），会克隆仓库并批量导入所有
+                    .vue/.uvue/.tsx/.jsx
+                    {!aiEnabled && "（整库导入可不配 LLM；按组件拉取需配置）"}
                   </div>
                 </div>
               )}

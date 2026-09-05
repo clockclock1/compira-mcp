@@ -22,11 +22,80 @@ pub struct AiExample {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiFetchPlan {
+    /// "urls" = download listed files; "repo" = clone whole repository
+    #[serde(default = "default_fetch_mode")]
+    pub mode: String,
+    #[serde(default)]
     pub urls: Vec<String>,
     pub note: Option<String>,
     /// Suggested library display name
     #[serde(default)]
     pub library_name: Option<String>,
+    /// When mode=repo
+    #[serde(default)]
+    pub repo_url: Option<String>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// Import every component file under the repo (default true for mode=repo)
+    #[serde(default = "default_true")]
+    pub whole_repo: bool,
+}
+
+fn default_fetch_mode() -> String {
+    "urls".into()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Detect a git hosting URL and whether the user wants the whole repo (no specific component).
+/// Returns `(clone_url, branch, whole_repo)`.
+pub fn detect_repo_intent(prompt: &str) -> Option<(String, String, bool)> {
+    let prompt = prompt.trim();
+    let re = regex::Regex::new(
+        r#"(?i)https?://(?:www\.)?(github\.com|gitlab\.com|gitee\.com)/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?(?:/(?:tree|blob)/([^?\s#]+))?"#,
+    )
+    .ok()?;
+    let caps = re.captures(prompt)?;
+    let host = caps.get(1)?.as_str();
+    let owner = caps.get(2)?.as_str();
+    let repo = caps.get(3)?.as_str().trim_end_matches(".git");
+    let mut branch = "main".to_string();
+    if let Some(rest) = caps.get(4) {
+        // tree/dev or tree/dev/packages/...
+        if let Some(b) = rest.as_str().split('/').next() {
+            if !b.is_empty() {
+                branch = b.to_string();
+            }
+        }
+    }
+    let repo_url = format!("https://{host}/{owner}/{repo}.git");
+
+    let remainder = re.replace_all(prompt, " ");
+    let leftover: String = remainder
+        .split_whitespace()
+        .filter(|t| {
+            let l = t.to_lowercase();
+            !matches!(
+                l.as_str(),
+                "git" | "github" | "gitlab" | "gitee" | "repo" | "仓库" | "组件库" | "拉取" | "导入" | "clone"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let whole_keywords = [
+        "全部", "所有", "整个", "整库", "批量", "全量", "所有组件", "全部组件",
+        "whole", "all", "entire", "everything",
+    ];
+    let has_whole = whole_keywords.iter().any(|k| {
+        leftover.to_lowercase().contains(&k.to_lowercase()) || prompt.to_lowercase().contains(&k.to_lowercase())
+    });
+
+    // Only URL (maybe plus 全部…) => whole repo. Named component => not whole.
+    let whole = leftover.is_empty() || has_whole;
+    Some((repo_url, branch, whole))
 }
 
 /// Enrich a component from source using an OpenAI-compatible chat API.
@@ -106,16 +175,18 @@ pub async fn plan_fetch_urls(llm: &LlmSettings, prompt: &str) -> anyhow::Result<
         .filter(|k| !k.trim().is_empty())
         .ok_or_else(|| anyhow::anyhow!("LLM API key not configured (admin settings)"))?;
 
-    let system = r#"你是组件获取助手。用户只用自然语言描述想要的前端组件，你必须自行确定可下载的原始文件 URL，并起一个合适的组件库名称。
+    let system = r#"你是组件获取助手。用户用自然语言或仓库地址描述要获取的前端组件。
 输出严格 JSON（不要 markdown）：
-{"urls":["https://raw.githubusercontent.com/.../Button.vue"],"note":"说明","library_name":"Element Plus Button"}
+{"mode":"urls","urls":["https://raw.githubusercontent.com/.../Button.vue"],"note":"说明","library_name":"Element Plus Button"}
+或整库导入：
+{"mode":"repo","repo_url":"https://github.com/owner/repo.git","branch":"dev","whole_repo":true,"note":"整库导入","library_name":"Element Plus"}
+
 规则：
-1. urls 必须是可直接 GET 下载的原始文件地址（优先 raw.githubusercontent.com、cdn.jsdelivr.net/gh、unpkg.com）
-2. 只返回组件相关文件：.vue / .uvue / .tsx / .jsx / .ts / .js，以及同目录 README.md（可选）
-3. 不要返回 HTML 文档页、npm 主页、blob 页面
-4. 根据用户描述选择最合适的开源组件库与路径；若不确定，给出最可能的 raw URL 并在 note 说明假设
-5. 最多 15 个 url，优先主组件文件与直接依赖的样式/子组件
-6. library_name 必填：8～24 字，概括来源与组件，例如「Element Plus Button」"#;
+1. 若用户只给了 GitHub/GitLab/Gitee 仓库地址、未指定具体组件名，或明确说「全部/所有组件/整库」，必须 mode=repo 且 whole_repo=true
+2. 若指定了具体组件（如 Button、Tag），mode=urls，给出可直接 GET 的 raw 文件地址（raw.githubusercontent.com / jsdelivr / unpkg）
+3. urls 只含 .vue/.uvue/.tsx/.jsx/.ts/.js 及可选 README.md；不要 HTML/blob 页；最多 30 个
+4. Element Plus 分支用 dev（不是 main）；不确定时可用 jsDelivr
+5. library_name 必填：8～24 字"#;
 
     let user = format!("用户需求:\n{prompt}");
     let content = chat_completion(llm, api_key, system, &user).await?;
@@ -189,14 +260,35 @@ fn parse_enrichment(content: &str) -> anyhow::Result<AiEnrichment> {
 fn parse_fetch_plan(content: &str) -> anyhow::Result<AiFetchPlan> {
     let cleaned = strip_fence(content);
     let mut plan: AiFetchPlan = serde_json::from_str(&cleaned).unwrap_or(AiFetchPlan {
+        mode: "urls".into(),
         urls: vec![],
         note: Some(cleaned.chars().take(200).collect()),
         library_name: None,
+        repo_url: None,
+        branch: None,
+        whole_repo: true,
     });
+    if plan.mode.is_empty() {
+        plan.mode = if plan.repo_url.as_ref().is_some_and(|u| !u.is_empty()) {
+            "repo".into()
+        } else {
+            "urls".into()
+        };
+    }
     plan.urls
         .retain(|u| u.starts_with("http://") || u.starts_with("https://"));
-    plan.urls.truncate(15);
-    if plan.urls.is_empty() {
+    plan.urls.truncate(30);
+    if plan.mode == "repo" {
+        if plan
+            .repo_url
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .is_none()
+        {
+            anyhow::bail!("AI mode=repo but repo_url is empty");
+        }
+    } else if plan.urls.is_empty() {
         anyhow::bail!("AI did not return any downloadable URLs");
     }
     if let Some(n) = plan.library_name.as_mut() {

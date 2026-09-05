@@ -114,6 +114,7 @@ impl Database {
             component_count: 0,
             rules: rules.map(String::from),
             source_type: source_type.into(),
+            last_error: None,
             last_synced_at: None,
             created_at: now,
         })
@@ -136,13 +137,14 @@ impl Database {
             source_type: row
                 .get::<_, Option<String>>(10)?
                 .unwrap_or_else(|| "git".into()),
+            last_error: row.get(11)?,
         })
     }
 
     pub fn list_libraries(&self) -> anyhow::Result<Vec<Library>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, repo_url, branch, local_path, status, component_count, rules, last_synced_at, created_at, COALESCE(source_type, 'git')
+            "SELECT id, name, repo_url, branch, local_path, status, component_count, rules, last_synced_at, created_at, COALESCE(source_type, 'git'), last_error
              FROM libraries ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map([], Self::map_library_row)?;
@@ -152,7 +154,7 @@ impl Database {
     pub fn get_library(&self, id: &str) -> anyhow::Result<Option<Library>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, name, repo_url, branch, local_path, status, component_count, rules, last_synced_at, created_at, COALESCE(source_type, 'git')
+            "SELECT id, name, repo_url, branch, local_path, status, component_count, rules, last_synced_at, created_at, COALESCE(source_type, 'git'), last_error
              FROM libraries WHERE id = ?1",
             [id],
             Self::map_library_row,
@@ -195,8 +197,13 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         if let Some(count) = component_count {
             conn.execute(
-                "UPDATE libraries SET status = ?1, component_count = ?2, last_synced_at = ?3 WHERE id = ?4",
+                "UPDATE libraries SET status = ?1, component_count = ?2, last_synced_at = ?3, last_error = NULL WHERE id = ?4",
                 params![status, count, Utc::now().to_rfc3339(), id],
+            )?;
+        } else if status == "ready" || status == "syncing" {
+            conn.execute(
+                "UPDATE libraries SET status = ?1, last_error = NULL WHERE id = ?2",
+                params![status, id],
             )?;
         } else {
             conn.execute(
@@ -207,11 +214,21 @@ impl Database {
         Ok(())
     }
 
+    pub fn set_library_error(&self, id: &str, error: &str) -> anyhow::Result<()> {
+        let msg: String = error.chars().take(2000).collect();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE libraries SET status = 'error', last_error = ?1 WHERE id = ?2",
+            params![msg, id],
+        )?;
+        Ok(())
+    }
+
     pub fn update_library(&self, lib: &Library) -> anyhow::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE libraries SET name = ?1, branch = ?2, rules = ?3 WHERE id = ?4",
-            params![lib.name, lib.branch, lib.rules, lib.id],
+            "UPDATE libraries SET name = ?1, branch = ?2, rules = ?3, repo_url = ?4 WHERE id = ?5",
+            params![lib.name, lib.branch, lib.rules, lib.repo_url, lib.id],
         )?;
         Ok(())
     }

@@ -54,6 +54,7 @@ export interface Library {
   component_count: number;
   rules: string | null;
   source_type?: string;
+  last_error?: string | null;
   last_synced_at: string | null;
   created_at: string;
 }
