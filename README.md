@@ -352,7 +352,7 @@ prefer:Cmp
 
 | Workflow | 触发 | 作用 |
 |----------|------|------|
-| `ci.yml` | push / PR | 多 OS `cargo check` + 前端 build |
+| `ci.yml` | PR / 手动 | 多 OS `cargo check` + 前端 build |
 | `build-binaries.yml` | **Release published** | 6 平台可执行文件 + 含 `static/` 的压缩包，挂到 Release |
 | `docker.yml` | **Release published** | 编译 linux amd64/arm64 → 构建并推送 `ghcr.io/.../compira-mcp` 多架构镜像 |
 
