@@ -1,6 +1,8 @@
 import { FormEvent, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import AlertBanner from "../components/AlertBanner";
+import { AmbientOrbs, GrainOverlay, ShineButton } from "../components/motion";
 
 function LogoIcon() {
   return (
@@ -37,50 +39,60 @@ export default function Login() {
   };
 
   return (
-    <div id="login-view">
-      <div className="login-glow glow-indigo" />
-      <div className="login-glow glow-violet" />
-      <div className="login-top-logo">
-        <div className="login-logo-icon">
+    <div id="login-view" className="login-lux">
+      <AmbientOrbs />
+      <GrainOverlay />
+      <div className="login-grid-bg" aria-hidden />
+      <div className="login-top-logo login-top-logo-anim">
+        <div className="login-logo-icon logo-pulse">
           <LogoIcon />
         </div>
         <div>
-          <div className="login-logo-title">组件库 MCP</div>
+          <div className="login-logo-title brand-display">CompiraMCP</div>
           <div className="login-logo-sub">COMPONENT LIBRARY SERVER</div>
         </div>
       </div>
-      <div className="login-card">
-        <div className="login-card-title">欢迎回来</div>
-        <div className="login-card-sub">登录组件库 MCP 服务器控制台，统一 Bearer Token 鉴权</div>
+      <div className="login-card login-card-lux glass-surface">
+        <div className="login-card-shine" aria-hidden />
+        <div className="login-card-title brand-display">欢迎回来</div>
+        <div className="login-card-sub">登录控制台 · 管理组件库 · 为 Agent 提供 MCP 检索</div>
         <form onSubmit={handleSubmit}>
-          <div className="login-field">
+          <div className="login-field field-reveal" style={{ ["--d" as string]: "0.08s" }}>
             <label htmlFor="login-user">用户名</label>
             <input
-              className="login-input"
+              className="login-input lux-input"
               id="login-user"
               type="text"
               autoFocus
               required
+              autoComplete="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="admin"
             />
           </div>
-          <div className="login-field" style={{ marginTop: 16 }}>
+          <div className="login-field field-reveal" style={{ marginTop: 16, ["--d" as string]: "0.16s" }}>
             <label htmlFor="login-pass">密码</label>
             <input
-              className="login-input"
+              className="login-input lux-input"
               id="login-pass"
               type="password"
               required
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••••"
             />
           </div>
-          <div className="login-options">
+          <div className="login-options field-reveal" style={{ ["--d" as string]: "0.22s" }}>
             <label className="remember" onClick={() => setRemember(!remember)}>
-              <span className="checkbox" style={{ background: remember ? "var(--primary)" : "var(--bg-input)", border: remember ? "none" : "1px solid var(--border)" }}>
+              <span
+                className="checkbox"
+                style={{
+                  background: remember ? "var(--accent)" : "var(--bg-input)",
+                  border: remember ? "none" : "1px solid var(--border)",
+                }}
+              >
                 {remember && (
                   <svg viewBox="0 0 10 10">
                     <polyline points="1,5.2 3.8,8 9,2" strokeLinecap="round" strokeLinejoin="round" />
@@ -89,17 +101,22 @@ export default function Login() {
               </span>
               记住我
             </label>
-            <span className="login-forgot">忘记密码？</span>
           </div>
-          {error && <p className="error" style={{ marginTop: 12 }}>{error}</p>}
-          <button className="login-btn" type="submit" disabled={submitting}>
-            {submitting ? "登录中..." : "登 录"}
-          </button>
+          {error && (
+            <div style={{ marginTop: 14 }} className="field-reveal" >
+              <AlertBanner title="登录失败" message={error} onClose={() => setError("")} />
+            </div>
+          )}
+          <div className="field-reveal" style={{ ["--d" as string]: "0.28s" }}>
+            <ShineButton type="submit" disabled={submitting} className="btn btn-primary shine-btn login-btn-lux">
+              {submitting ? "登录中..." : "进入控制台"}
+            </ShineButton>
+          </div>
         </form>
-        <div className="login-note">首次启动默认账号 admin / admin123，请登录后修改密码</div>
+        <div className="login-note">首次启动默认账号 admin / admin123</div>
       </div>
-      <div className="login-copyright">Copyright 2026 Component Library MCP Server</div>
-      <div className="login-version">v0.1.0</div>
+      <div className="login-copyright">Copyright 2026 CompiraMCP</div>
+      <div className="login-version chip-glow">v0.1.0</div>
     </div>
   );
 }

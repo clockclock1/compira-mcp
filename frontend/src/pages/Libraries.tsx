@@ -2,6 +2,8 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import { Link } from "react-router-dom";
 import { api, Library, SyncTask } from "../api/client";
 import AlertBanner from "../components/AlertBanner";
+import EmptyState from "../components/EmptyState";
+import { PageMotion, ShineButton } from "../components/motion";
 
 type Filter = "all" | "synced" | "syncing" | "failed";
 type CreateMode = "git" | "upload" | "fetch";
@@ -202,15 +204,36 @@ export default function Libraries() {
   };
 
   const handleSync = async (lib: Library) => {
+    if (tasks[lib.id]) return;
     setError("");
     try {
-      if ((lib.source_type || "git") === "git") {
-        await api.libraries.sync(lib.id);
-      } else {
-        setError("非 Git 组件库请在详情页使用「上传」或「AI 拉取」添加组件");
-      }
+      await api.libraries.sync(lib.id);
+      load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "同步失败");
+    }
+  };
+
+  const handleSyncAll = async () => {
+    setError("");
+    const targets = libraries.filter((l) => !tasks[l.id]);
+    if (targets.length === 0) {
+      setError("没有可同步的组件库（可能都在进行中）");
+      return;
+    }
+    let ok = 0;
+    const errors: string[] = [];
+    for (const lib of targets) {
+      try {
+        await api.libraries.sync(lib.id);
+        ok += 1;
+      } catch (err) {
+        errors.push(`${lib.name}: ${err instanceof Error ? err.message : "失败"}`);
+      }
+    }
+    load();
+    if (errors.length) {
+      setError(`已启动 ${ok} 个同步；失败：${errors.join("；")}`);
     }
   };
 
@@ -225,7 +248,7 @@ export default function Libraries() {
   };
 
   return (
-    <div className="page">
+    <PageMotion>
       <div className="page-header">
         <div>
           <h1>组件库</h1>
@@ -247,13 +270,26 @@ export default function Libraries() {
               onChange={(e) => setKeyword(e.target.value)}
             />
           </div>
-          <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={handleSyncAll}
+            disabled={libraries.length === 0}
+            title="重新同步/索引全部组件库"
+          >
+            <svg viewBox="0 0 24 24">
+              <path d="M21 12a9 9 0 1 1-2.6-6.4" />
+              <path d="M21 3v6h-6" />
+            </svg>
+            全部同步
+          </button>
+          <ShineButton onClick={() => setShowModal(true)}>
             <svg viewBox="0 0 24 24">
               <path d="M12 5v14" />
               <path d="M5 12h14" />
             </svg>
             添加组件库
-          </button>
+          </ShineButton>
         </div>
       </div>
 
@@ -318,7 +354,16 @@ export default function Libraries() {
         </div>
         <div className="divider" />
         {filtered.length === 0 ? (
-          <div className="empty">暂无组件库，点击上方添加（Git / 上传 / AI 拉取）</div>
+          <EmptyState
+            title={libraries.length === 0 ? "暂无组件库" : "没有匹配的结果"}
+            description={
+              libraries.length === 0
+                ? "支持 Git 同步、上传组件文件，或用自然语言 AI 拉取整库"
+                : "试试切换筛选条件或清空搜索关键词"
+            }
+            actionLabel={libraries.length === 0 ? "添加组件库" : undefined}
+            onAction={libraries.length === 0 ? () => setShowModal(true) : undefined}
+          />
         ) : (
           <table className="table table-row-lg">
             <thead>
@@ -423,15 +468,27 @@ export default function Libraries() {
                       {formatTime(lib.last_synced_at)}
                     </td>
                     <td>
-                      <div style={{ display: "flex", gap: 16 }}>
+                      <div className="row-actions">
                         <Link to={`/libraries/${lib.id}`} className="link-action">
                           详情
                         </Link>
-                        {(lib.source_type || "git") === "git" && (
-                          <span className="link-action muted" onClick={() => handleSync(lib)}>
-                            同步
-                          </span>
-                        )}
+                        <button
+                          type="button"
+                          className="btn-sync"
+                          disabled={!!task}
+                          onClick={() => handleSync(lib)}
+                          title={
+                            (lib.source_type || "git") === "git"
+                              ? "拉取远程并重新索引"
+                              : "重新扫描本地文件并索引"
+                          }
+                        >
+                          <svg viewBox="0 0 24 24" width="13" height="13">
+                            <path d="M21 12a9 9 0 1 1-2.6-6.4" />
+                            <path d="M21 3v6h-6" />
+                          </svg>
+                          {task ? "同步中" : "同步"}
+                        </button>
                         <span className="link-action danger" onClick={() => handleDelete(lib.id)}>
                           删除
                         </span>
@@ -571,6 +628,6 @@ export default function Libraries() {
           </form>
         </div>
       </div>
-    </div>
+    </PageMotion>
   );
 }

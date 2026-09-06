@@ -180,11 +180,22 @@ export default function LibraryDetail() {
           <button className="btn btn-ghost" onClick={() => setShowFetch(true)}>
             AI 拉取
           </button>
-          {sourceType === "git" && (
-            <button className="btn btn-ghost" onClick={handleSync} disabled={busy}>
-              {busy ? "同步中…" : "立即同步"}
-            </button>
-          )}
+          <button
+            className="btn btn-primary"
+            onClick={handleSync}
+            disabled={busy || library?.status === "syncing"}
+            title={
+              sourceType === "git"
+                ? "拉取远程仓库并重新索引"
+                : "重新扫描本地目录并索引"
+            }
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14">
+              <path d="M21 12a9 9 0 1 1-2.6-6.4" />
+              <path d="M21 3v6h-6" />
+            </svg>
+            {busy || library?.status === "syncing" ? "同步中…" : "立即同步"}
+          </button>
         </div>
       </div>
 

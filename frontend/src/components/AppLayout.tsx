@@ -110,8 +110,8 @@ export default function AppLayout() {
             <LogoIcon />
           </div>
           <div className="logo-text">
-            <div className="logo-title">组件库 MCP</div>
-            <div className="logo-sub">COMPONENT LIBRARY SERVER</div>
+            <div className="logo-title brand-display">CompiraMCP</div>
+            <div className="logo-sub">COMPONENT LIBRARY</div>
           </div>
         </div>
         <nav className="nav">
@@ -130,14 +130,17 @@ export default function AppLayout() {
             ))}
         </nav>
         <div className="nav-spacer" />
-        <div className="user-card" onClick={() => logout()} title="点击退出登录" style={{ cursor: "pointer" }}>
+        <div className="user-card">
           <div className="user-avatar">{avatarChar}</div>
           <div className="user-text">
             <div className="user-name">{displayName}</div>
             <div className="user-meta">
-              {user?.username} · {user?.role === "admin" ? "全部权限" : "普通用户"} · 退出
+              {user?.username} · {user?.role === "admin" ? "管理员" : "用户"}
             </div>
           </div>
+          <button type="button" className="btn-logout" onClick={() => logout()} title="退出登录">
+            退出
+          </button>
         </div>
       </aside>
       <main className="content">

@@ -71,13 +71,6 @@ impl TaskManager {
             .get_library(&library_id)?
             .ok_or_else(|| anyhow::anyhow!("Library not found"))?;
 
-        if library.source_type != "git" {
-            anyhow::bail!(
-                "Library source_type is '{}', use upload/fetch instead of git sync",
-                library.source_type
-            );
-        }
-
         let task = self.db.create_sync_task(&library_id)?;
         let task_id = task.id.clone();
         let return_task_id = task_id.clone();
@@ -89,15 +82,17 @@ impl TaskManager {
         let branch = library.branch.clone();
         let local_path = PathBuf::from(&library.local_path);
         let name = library.name.clone();
+        let source_type = library.source_type.clone();
         let this = self.clone();
 
         tokio::spawn(async move {
             this.run_job(task_id.clone(), lib_id.clone(), move || async move {
-                indexer::sync_library(
+                indexer::sync_or_reindex(
                     &db,
                     config.as_ref(),
                     &task_id,
                     &lib_id,
+                    &source_type,
                     &repo_url,
                     &branch,
                     &local_path,

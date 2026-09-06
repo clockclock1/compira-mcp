@@ -1,6 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, Library, Stats, SyncTask } from "../api/client";
+import { api, ApiKey, Library, Stats, SyncTask } from "../api/client";
+import AlertBanner from "../components/AlertBanner";
+import CopyButton from "../components/CopyButton";
+import EmptyState from "../components/EmptyState";
+import { StatSkeleton } from "../components/Skeleton";
+import {
+  CountUp,
+  GlassCard,
+  PageMotion,
+  Stagger,
+  StaggerItem,
+} from "../components/motion";
 
 function formatTime(iso: string | null) {
   if (!iso) return "未同步";
@@ -19,60 +30,117 @@ function statusLabel(status: string) {
   return { text: status, cls: "" };
 }
 
+function sourceLabel(t?: string) {
+  if (t === "upload") return "上传";
+  if (t === "fetch") return "AI 拉取";
+  return "Git";
+}
+
 export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [libraries, setLibraries] = useState<Library[]>([]);
   const [tasks, setTasks] = useState<SyncTask[]>([]);
+  const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
   const load = () => {
     setRefreshing(true);
-    Promise.all([api.stats(), api.libraries.list(), api.tasks.list()])
-      .then(([s, libs, t]) => {
+    Promise.all([api.stats(), api.libraries.list(), api.tasks.list(), api.apiKeys.list()])
+      .then(([s, libs, t, keys]) => {
         setStats(s);
         setLibraries(libs);
         setTasks(t.slice(0, 8));
+        setApiKeys(keys);
+        setError("");
       })
       .catch((e) => setError(e.message))
-      .finally(() => setRefreshing(false));
+      .finally(() => {
+        setRefreshing(false);
+        setLoaded(true);
+      });
   };
 
   useEffect(() => {
     load();
   }, []);
 
-  const recentLibs = [...libraries]
-    .sort((a, b) => {
-      const ta = a.last_synced_at ? new Date(a.last_synced_at).getTime() : 0;
-      const tb = b.last_synced_at ? new Date(b.last_synced_at).getTime() : 0;
-      return tb - ta;
-    })
-    .slice(0, 4);
+  const recentLibs = useMemo(
+    () =>
+      [...libraries]
+        .sort((a, b) => {
+          const ta = a.last_synced_at ? new Date(a.last_synced_at).getTime() : 0;
+          const tb = b.last_synced_at ? new Date(b.last_synced_at).getTime() : 0;
+          return tb - ta;
+        })
+        .slice(0, 5),
+    [libraries],
+  );
 
-  const frameworkDist = (() => {
-    // approximate from library names/status — we don't have global framework stats; show placeholders from component count
-    const total = stats?.components || 0;
-    return [
-      { name: "Vue / Uni-app", pct: total ? 70 : 0, color: "var(--type-blue)" },
-      { name: "其他", pct: total ? 30 : 0, color: "var(--primary)" },
-    ];
-  })();
+  const sourceDist = useMemo(() => {
+    const buckets: Record<string, { name: string; count: number; color: string }> = {
+      git: { name: "Git 同步", count: 0, color: "var(--accent-2)" },
+      fetch: { name: "AI 拉取", count: 0, color: "var(--violet)" },
+      upload: { name: "本地上传", count: 0, color: "var(--accent)" },
+    };
+    for (const lib of libraries) {
+      const key = lib.source_type || "git";
+      const b = buckets[key] || buckets.git;
+      b.count += lib.component_count || 0;
+    }
+    const total = Object.values(buckets).reduce((s, b) => s + b.count, 0) || 1;
+    return Object.values(buckets)
+      .filter((b) => b.count > 0)
+      .map((b) => ({ ...b, pct: Math.round((b.count * 100) / total) }));
+  }, [libraries]);
 
-  const runningTasks = tasks.filter((t) => t.status === "running").length;
+  const runningTasks = tasks.filter(
+    (t) => t.status === "running" || t.status === "pending",
+  ).length;
+  const failedLibs = libraries.filter((l) => l.status === "error").length;
+
+  /** Earliest created key that still has a recoverable secret. */
+  const firstApiKey = useMemo(() => {
+    const withSecret = apiKeys
+      .filter((k) => !!k.key?.trim())
+      .sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      );
+    return withSecret[0] || null;
+  }, [apiKeys]);
+
+  const mcpApiKeyDisplay = firstApiKey?.key?.trim() || "<your-api-key>";
+
+  const mcpSnippet = `{
+  "mcpServers": {
+    "compira": {
+      "url": "${window.location.origin}/mcp",
+      "headers": {
+        "X-API-Key": "${mcpApiKeyDisplay}"
+      }
+    }
+  }
+}`;
 
   return (
-    <div className="page">
+    <PageMotion>
       <div className="page-header">
         <div>
           <h1>仪表盘</h1>
-          <div className="page-sub">组件库 MCP 服务器运行概览</div>
+          <div className="page-sub">实时运维概览 · 玻璃态面板 · 组件索引状态</div>
         </div>
         <div className="header-actions">
           <div className="chip-status chip-green">
             <span className="dot" />
             服务运行中
           </div>
+          {failedLibs > 0 && (
+            <Link to="/libraries" className="chip-status chip-red">
+              <span className="dot dot-red" />
+              {failedLibs} 个库失败
+            </Link>
+          )}
           <button className="btn btn-ghost" onClick={load} disabled={refreshing}>
             <svg viewBox="0 0 24 24">
               <path d="M21 12a9 9 0 1 1-2.6-6.4" />
@@ -83,42 +151,82 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {error && <p className="error">{error}</p>}
+      {error && (
+        <AlertBanner title="加载失败" message={error} onClose={() => setError("")} />
+      )}
 
-      {stats && (
-        <div className="stats-row">
-          <div className="stat-card">
-            <div className="stat-label">组件库</div>
-            <div className="stat-value">{stats.libraries}</div>
-          </div>
-          <div className="stat-card">
+      {!loaded && <StatSkeleton count={4} />}
+
+      {loaded && stats && (
+        <Stagger className="stats-row">
+          <StaggerItem className="stat-card">
             <div className="stat-label">
-              已索引组件 <span className="stat-delta blue">实时</span>
+              组件库
+              <span className="stat-icon" aria-hidden>
+                <svg viewBox="0 0 24 24" width="16" height="16">
+                  <path d="M3 7l9-4 9 4-9 4-9-4z" />
+                  <path d="M3 7v10l9 4 9-4V7" />
+                </svg>
+              </span>
             </div>
-            <div className="stat-value">{stats.components.toLocaleString()}</div>
-          </div>
-          <div className="stat-card">
+            <div className="stat-value">
+              <CountUp value={stats.libraries} />
+            </div>
+            <div className="stat-unit">已注册仓库</div>
+          </StaggerItem>
+          <StaggerItem className="stat-card">
             <div className="stat-label">
-              API Keys <span className="stat-delta violet">{stats.api_keys} 已启用</span>
+              已索引组件
+              <span className="stat-delta blue">实时</span>
             </div>
-            <div className="stat-value">{stats.api_keys}</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">用户</div>
-            <div className="stat-value">{stats.users}</div>
-          </div>
-        </div>
+            <div className="stat-value">
+              <CountUp value={stats.components} />
+            </div>
+            <div className="stat-unit">可供 MCP 检索</div>
+          </StaggerItem>
+          <StaggerItem className="stat-card">
+            <div className="stat-label">
+              API Keys
+              <span className="stat-delta violet">{stats.api_keys} 启用</span>
+            </div>
+            <div className="stat-value">
+              <CountUp value={stats.api_keys} />
+            </div>
+            <div className="stat-unit">
+              <Link to="/api-keys" className="link-action" style={{ fontSize: 12 }}>
+                管理密钥
+              </Link>
+            </div>
+          </StaggerItem>
+          <StaggerItem className="stat-card">
+            <div className="stat-label">同步队列</div>
+            <div className="stat-value">
+              <CountUp value={runningTasks} />
+            </div>
+            <div className="stat-unit">{runningTasks ? "任务进行中" : "空闲"}</div>
+          </StaggerItem>
+        </Stagger>
       )}
 
       <div className="dash-row">
-        <div className="card" style={{ padding: 20 }}>
+        <GlassCard style={{ padding: 20 }}>
           <div className="card-header" style={{ padding: "0 0 14px" }}>
-            <div className="card-title">MCP 接入说明</div>
+            <div className="card-title">MCP 接入</div>
             <span style={{ flex: 1 }} />
-            <span className="chip-method">标准 MCP 协议 · HTTP + X-API-Key</span>
+            <span className="chip-method">HTTP · X-API-Key</span>
+            <CopyButton text={mcpSnippet} label="复制配置" />
           </div>
+          {!firstApiKey && (
+            <div style={{ fontSize: 12, color: "var(--text-3)", marginBottom: 10 }}>
+              暂无可用密钥，请到{" "}
+              <Link to="/api-keys" className="link-action">
+                API Keys
+              </Link>{" "}
+              创建后自动填入
+            </div>
+          )}
           <div className="code-block">
-            <span className="cmt"># Cursor / Claude Code 配置（mcp.json）</span>
+            <span className="cmt"># Cursor mcp.json</span>
             <br />
             {"{ "}
             <span className="key">"mcpServers"</span>
@@ -132,11 +240,11 @@ export default function Dashboard() {
             &nbsp;&nbsp;&nbsp;&nbsp;
             <span className="key">"headers"</span>
             {": { "}
-            <span className="key">"X-API-Key"</span>: <span className="str">"&lt;your-api-key&gt;"</span>
+            <span className="key">"X-API-Key"</span>: <span className="str">"{mcpApiKeyDisplay}"</span>
             {" } } } }"}
           </div>
-        </div>
-        <div className="card" style={{ padding: 20, minHeight: 296 }}>
+        </GlassCard>
+        <GlassCard style={{ padding: 20, minHeight: 296 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
             <div className="card-title">最近同步</div>
             <Link to="/libraries" className="link-action" style={{ fontSize: 12 }}>
@@ -144,19 +252,26 @@ export default function Dashboard() {
             </Link>
           </div>
           <div className="sync-list">
-            {recentLibs.length === 0 && <div className="empty" style={{ padding: 20 }}>暂无组件库</div>}
+            {loaded && recentLibs.length === 0 && (
+              <EmptyState
+                title="还没有组件库"
+                description="通过 Git、上传或 AI 拉取导入组件，即可被 Cursor 检索"
+                actionLabel="添加组件库"
+                actionTo="/libraries"
+              />
+            )}
             {recentLibs.map((lib) => {
               const st = statusLabel(lib.status);
               return (
-                <div className="sync-item" key={lib.id}>
+                <Link to={`/libraries/${lib.id}`} className="sync-item sync-item-link" key={lib.id}>
                   <div
                     className="sync-icon"
                     style={{
                       background:
                         lib.status === "error"
-                          ? "rgba(248,113,113,0.12)"
-                          : "rgba(99,102,241,0.12)",
-                      color: lib.status === "error" ? "var(--red)" : "var(--primary-light)",
+                          ? "rgba(251,113,133,0.12)"
+                          : "rgba(45,212,191,0.12)",
+                      color: lib.status === "error" ? "var(--red)" : "var(--accent)",
                     }}
                   >
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -167,45 +282,52 @@ export default function Dashboard() {
                   <div className="sync-body">
                     <div className="sync-name">
                       {lib.name}{" "}
-                      <span style={{ fontSize: 11, color: "var(--text-3)", fontWeight: 400 }}>
-                        · {lib.component_count} 个组件
+                      <span className="chip-tag" style={{ marginLeft: 6 }}>
+                        {sourceLabel(lib.source_type)}
                       </span>
                     </div>
                     <div className="sync-sub">
-                      {lib.branch} → <span className={st.cls}>{st.text}</span>
+                      {lib.component_count.toLocaleString()} 组件 ·{" "}
+                      <span className={st.cls}>{st.text}</span>
                     </div>
                   </div>
                   <div className="sync-time">{formatTime(lib.last_synced_at)}</div>
-                </div>
+                </Link>
               );
             })}
           </div>
-        </div>
+        </GlassCard>
       </div>
 
       <div className="dash-row-3">
-        <div className="card" style={{ padding: 20, minHeight: 204 }}>
+        <GlassCard style={{ padding: 20, minHeight: 204 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-            <div className="card-title">组件概览</div>
+            <div className="card-title">组件来源分布</div>
             <span style={{ fontSize: 12, color: "var(--text-3)" }}>
               {(stats?.components || 0).toLocaleString()} 个组件
             </span>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            {frameworkDist.map((d) => (
-              <div className="dist-bar-row" key={d.name}>
-                <div className="dist-label">
-                  <span>{d.name}</span>
-                  <span>{d.pct}%</span>
+          {sourceDist.length === 0 ? (
+            <EmptyState title="暂无索引数据" description="导入组件库后将显示来源占比" />
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {sourceDist.map((d) => (
+                <div className="dist-bar-row" key={d.name}>
+                  <div className="dist-label">
+                    <span>{d.name}</span>
+                    <span>
+                      {d.pct}% · {d.count.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="dist-track">
+                    <div className="dist-fill" style={{ width: `${d.pct}%`, background: d.color }} />
+                  </div>
                 </div>
-                <div className="dist-track">
-                  <div className="dist-fill" style={{ width: `${d.pct}%`, background: d.color }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="card" style={{ padding: 20, minHeight: 204 }}>
+              ))}
+            </div>
+          )}
+        </GlassCard>
+        <GlassCard style={{ padding: 20, minHeight: 204 }} spotlight={false}>
           <div className="card-title" style={{ marginBottom: 4 }}>
             系统状态
           </div>
@@ -221,15 +343,17 @@ export default function Dashboard() {
             <span className="sys-value">{runningTasks} 个任务</span>
           </div>
           <div className="sys-row">
-            <span className="sys-label">组件库</span>
-            <span className="sys-value">{stats?.libraries ?? 0}</span>
+            <span className="sys-label">失败库</span>
+            <span className="sys-value" style={{ color: failedLibs ? "var(--red)" : undefined }}>
+              {failedLibs}
+            </span>
           </div>
           <div className="sys-row">
-            <span className="sys-label">服务版本</span>
-            <span className="sys-value">v0.1.0</span>
+            <span className="sys-label">用户</span>
+            <span className="sys-value">{stats?.users ?? "—"}</span>
           </div>
-        </div>
+        </GlassCard>
       </div>
-    </div>
+    </PageMotion>
   );
 }

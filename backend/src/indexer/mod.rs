@@ -42,6 +42,61 @@ pub async fn sync_library(
     .await
 }
 
+/// Sync Git remote, or re-index local upload/fetch directories so users can refresh anytime.
+pub async fn sync_or_reindex(
+    db: &Database,
+    config: &Config,
+    task_id: &str,
+    library_id: &str,
+    source_type: &str,
+    repo_url: &str,
+    branch: &str,
+    local_path: &Path,
+    library_name: &str,
+) -> anyhow::Result<usize> {
+    if source_type == "git" || source_type.is_empty() {
+        return sync_library(
+            db,
+            config,
+            task_id,
+            library_id,
+            repo_url,
+            branch,
+            local_path,
+            library_name,
+        )
+        .await;
+    }
+
+    // upload / fetch: re-scan local tree
+    if !local_path.exists() {
+        anyhow::bail!("本地目录不存在，请先上传或 AI 拉取组件");
+    }
+
+    db.update_library_status(library_id, "syncing", None)?;
+    db.update_sync_task(
+        task_id,
+        10,
+        "Re-indexing local component files...",
+        None,
+    )?;
+    db.clear_library_components(library_id)?;
+
+    // upload may include .ts/.js; fetch/git-style trees prefer UI extensions
+    let bulk = source_type != "upload";
+    ingest_directory_chunked(
+        db,
+        config,
+        task_id,
+        library_id,
+        local_path,
+        library_name,
+        bulk,
+        None,
+    )
+    .await
+}
+
 /// Incrementally ingest specific relative files (upload / fetch). Optionally AI-enrich.
 pub async fn ingest_files(
     db: &Database,
