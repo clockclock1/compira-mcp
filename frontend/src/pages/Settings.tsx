@@ -123,185 +123,197 @@ export default function Settings() {
   };
 
   return (
-    <div className="page">
+    <div className="page settings-page">
       <div className="page-header">
         <div>
           <h1>系统设置</h1>
           <div className="page-sub">
-            LLM 与同步并发 · 添加组件库不限速，仅同步/解析受并发限制
+            添加组件库不限速 · 仅同步/解析受并发限制
           </div>
         </div>
-        <div className={`chip-status ${settings?.enabled ? "chip-green" : ""}`}>
-          <span
-            className="dot"
-            style={{ background: settings?.enabled ? undefined : "var(--text-4)" }}
-          />
-          {settings?.enabled ? "AI 已启用" : "AI 未配置"}
-        </div>
-      </div>
-
-      {error && <p className="error">{error}</p>}
-      {ok && (
-        <p style={{ color: "var(--green)", fontSize: 12.5, marginBottom: 12 }}>{ok}</p>
-      )}
-
-      <div className="tip-banner">
-        <svg viewBox="0 0 24 24">
-          <circle cx="12" cy="12" r="9" />
-          <path d="M12 8v4" />
-          <path d="M12 16h.01" />
-        </svg>
-        <span>
-          可随时批量添加组件库（几十个也无妨）；真正占资源的是同步与解析。下方「同步并发」控制并行库数与单库内解析线程。
-        </span>
-      </div>
-
-      <div className="card" style={{ maxWidth: 640, marginBottom: 20 }}>
-        <div className="card-header">
-          <div className="card-title">同步并发</div>
+        <div className="settings-header-meta">
+          <div className={`chip-status ${settings?.enabled ? "chip-green" : ""}`}>
+            <span
+              className="dot"
+              style={{ background: settings?.enabled ? undefined : "var(--text-4)" }}
+            />
+            {settings?.enabled ? "AI 已启用" : "AI 未配置"}
+          </div>
           {sync && (
             <span className="chip-file">
               并行 {sync.max_jobs} · 解析 {sync.parse_concurrency || "自动"}
             </span>
           )}
         </div>
-        <div className="divider" />
-        <form className="card-body" onSubmit={handleSaveSync}>
-          <div className="modal-field">
-            <label>同步并行数（max_jobs）</label>
-            <input
-              className="modal-input"
-              type="number"
-              min={1}
-              max={64}
-              value={maxJobs}
-              onChange={(e) => setMaxJobs(e.target.value)}
-              required
-            />
-            <div className="hint-text" style={{ marginTop: 6 }}>
-              同时进行同步/入库的组件库上限。添加操作不受此限制。
-            </div>
-          </div>
-          <div className="modal-field" style={{ marginTop: 16 }}>
-            <label>组件解析并发（parse_concurrency）</label>
-            <input
-              className="modal-input"
-              type="number"
-              min={0}
-              max={256}
-              value={parseConc}
-              onChange={(e) => setParseConc(e.target.value)}
-              required
-            />
-            <div className="hint-text" style={{ marginTop: 6 }}>
-              单库内并行解析文件数。填 0 表示按 CPU 核数自动。
-            </div>
-          </div>
-          <div className="modal-field" style={{ marginTop: 16 }}>
-            <label>入库批次大小（ingest_batch_size）</label>
-            <input
-              className="modal-input"
-              type="number"
-              min={1}
-              max={500}
-              value={batchSize}
-              onChange={(e) => setBatchSize(e.target.value)}
-              required
-            />
-            <div className="hint-text" style={{ marginTop: 6 }}>
-              每批写入 SQLite 的组件数量。
-            </div>
-          </div>
-          <div className="modal-field" style={{ marginTop: 16 }}>
-            <label>下载并发（download_concurrency）</label>
-            <input
-              className="modal-input"
-              type="number"
-              min={1}
-              max={32}
-              value={downloadConc}
-              onChange={(e) => setDownloadConc(e.target.value)}
-              required
-            />
-            <div className="hint-text" style={{ marginTop: 6 }}>
-              AI 拉取时并行下载文件数。
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-            <button type="submit" className="btn btn-primary" disabled={savingSync}>
-              {savingSync ? "保存中…" : "保存同步设置"}
-            </button>
-          </div>
-        </form>
       </div>
 
-      <div className="card" style={{ maxWidth: 640 }}>
-        <div className="card-header">
-          <div className="card-title">LLM 配置</div>
-          {settings?.api_key_masked && (
-            <span className="chip-file">{settings.api_key_masked}</span>
-          )}
-        </div>
-        <div className="divider" />
-        <form className="card-body" onSubmit={handleSave}>
-          <div className="modal-field">
-            <label>API Key</label>
-            <input
-              className="modal-input"
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={
-                settings?.api_key_set ? "已配置，留空表示不修改" : "sk-xxxxxxxx"
-              }
-              autoComplete="off"
-            />
-            <div className="hint-text" style={{ marginTop: 6 }}>
-              对应环境变量 COMPIRA_LLM_API_KEY / OPENAI_API_KEY
+      {error && <p className="error">{error}</p>}
+      {ok && <p className="settings-ok">{ok}</p>}
+
+      <div className="settings-grid">
+        {/* Sync concurrency */}
+        <section className="card settings-card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">同步并发</div>
+              <div className="settings-card-desc">
+                控制同时跑几个库、解析与下载强度
+              </div>
             </div>
           </div>
-          <div className="modal-field" style={{ marginTop: 16 }}>
-            <label>Base URL</label>
-            <input
-              className="modal-input"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://api.openai.com/v1"
-              required
-            />
-            <div className="hint-text" style={{ marginTop: 6 }}>
-              COMPIRA_LLM_BASE_URL，勿带尾斜杠以外的路径错误
+          <div className="divider" />
+          <form className="card-body" onSubmit={handleSaveSync}>
+            <div className="settings-fields-2">
+              <div className="settings-field">
+                <label htmlFor="sync-max-jobs">
+                  同步并行数
+                  <span className="settings-key">max_jobs</span>
+                </label>
+                <input
+                  id="sync-max-jobs"
+                  className="modal-input"
+                  type="number"
+                  min={1}
+                  max={64}
+                  value={maxJobs}
+                  onChange={(e) => setMaxJobs(e.target.value)}
+                  required
+                />
+                <p className="hint-text">同时同步/入库的库上限</p>
+              </div>
+              <div className="settings-field">
+                <label htmlFor="sync-parse">
+                  解析并发
+                  <span className="settings-key">parse</span>
+                </label>
+                <input
+                  id="sync-parse"
+                  className="modal-input"
+                  type="number"
+                  min={0}
+                  max={256}
+                  value={parseConc}
+                  onChange={(e) => setParseConc(e.target.value)}
+                  required
+                />
+                <p className="hint-text">单库解析线程，0 = CPU 自动</p>
+              </div>
+              <div className="settings-field">
+                <label htmlFor="sync-batch">
+                  入库批次
+                  <span className="settings-key">batch</span>
+                </label>
+                <input
+                  id="sync-batch"
+                  className="modal-input"
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={batchSize}
+                  onChange={(e) => setBatchSize(e.target.value)}
+                  required
+                />
+                <p className="hint-text">每批写入 SQLite 的组件数</p>
+              </div>
+              <div className="settings-field">
+                <label htmlFor="sync-download">
+                  下载并发
+                  <span className="settings-key">download</span>
+                </label>
+                <input
+                  id="sync-download"
+                  className="modal-input"
+                  type="number"
+                  min={1}
+                  max={32}
+                  value={downloadConc}
+                  onChange={(e) => setDownloadConc(e.target.value)}
+                  required
+                />
+                <p className="hint-text">AI 拉取时并行下载数</p>
+              </div>
             </div>
-          </div>
-          <div className="modal-field" style={{ marginTop: 16 }}>
-            <label>Model</label>
-            <input
-              className="modal-input"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder="gpt-4o-mini"
-              required
-            />
-            <div className="hint-text" style={{ marginTop: 6 }}>
-              COMPIRA_LLM_MODEL
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-            <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? "保存中…" : "保存设置"}
-            </button>
-            {settings?.api_key_set && (
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={handleClearKey}
-                disabled={saving}
-              >
-                清除 API Key
+            <div className="settings-actions">
+              <button type="submit" className="btn btn-primary" disabled={savingSync}>
+                {savingSync ? "保存中…" : "保存同步设置"}
               </button>
+            </div>
+          </form>
+        </section>
+
+        {/* LLM */}
+        <section className="card settings-card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">LLM 配置</div>
+              <div className="settings-card-desc">
+                OpenAI 兼容接口，供 AI 拉取与解析
+              </div>
+            </div>
+            {settings?.api_key_masked && (
+              <span className="chip-file">{settings.api_key_masked}</span>
             )}
           </div>
-        </form>
+          <div className="divider" />
+          <form className="card-body" onSubmit={handleSave}>
+            <div className="settings-field">
+              <label htmlFor="llm-key">API Key</label>
+              <input
+                id="llm-key"
+                className="modal-input"
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={
+                  settings?.api_key_set ? "已配置，留空表示不修改" : "sk-xxxxxxxx"
+                }
+                autoComplete="off"
+              />
+              <p className="hint-text">COMPIRA_LLM_API_KEY / OPENAI_API_KEY</p>
+            </div>
+            <div className="settings-fields-2" style={{ marginTop: 14 }}>
+              <div className="settings-field">
+                <label htmlFor="llm-base">Base URL</label>
+                <input
+                  id="llm-base"
+                  className="modal-input"
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  placeholder="https://api.openai.com/v1"
+                  required
+                />
+                <p className="hint-text">勿带错误路径后缀</p>
+              </div>
+              <div className="settings-field">
+                <label htmlFor="llm-model">Model</label>
+                <input
+                  id="llm-model"
+                  className="modal-input"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder="gpt-4o-mini"
+                  required
+                />
+                <p className="hint-text">COMPIRA_LLM_MODEL</p>
+              </div>
+            </div>
+            <div className="settings-actions">
+              <button type="submit" className="btn btn-primary" disabled={saving}>
+                {saving ? "保存中…" : "保存 LLM"}
+              </button>
+              {settings?.api_key_set && (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={handleClearKey}
+                  disabled={saving}
+                >
+                  清除 API Key
+                </button>
+              )}
+            </div>
+          </form>
+        </section>
       </div>
     </div>
   );
