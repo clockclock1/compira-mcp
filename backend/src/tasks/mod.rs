@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Semaphore};
 
 use crate::config::Config;
 use crate::db::Database;
@@ -12,13 +12,18 @@ pub struct TaskManager {
     db: Database,
     config: Arc<Config>,
     tx: broadcast::Sender<String>,
+    /// Limits how many library jobs run at once so the API stays responsive.
+    job_slots: Arc<Semaphore>,
 }
 
 impl TaskManager {
     pub fn new(db: Database, config: Config) -> Self {
-        let (tx, _) = broadcast::channel(64);
+        let (tx, _) = broadcast::channel(256);
+        let max_jobs = config.max_jobs;
+        tracing::info!("Task manager: max concurrent library jobs = {max_jobs}");
         Self {
             db,
+            job_slots: Arc::new(Semaphore::new(max_jobs)),
             config: Arc::new(config),
             tx,
         }
@@ -28,6 +33,38 @@ impl TaskManager {
         self.tx.subscribe()
     }
 
+    async fn run_job<F, Fut>(&self, task_id: String, library_id: String, work: F)
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
+    {
+        let slots = self.job_slots.clone();
+        let db = self.db.clone();
+        let tx = self.tx.clone();
+        let _ = tx.send(task_id.clone());
+
+        let permit = match slots.acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => {
+                let msg = "Job queue closed".to_string();
+                let _ = db.update_sync_task(&task_id, 0, &msg, Some("failed"));
+                let _ = db.set_library_error(&library_id, &msg);
+                return;
+            }
+        };
+
+        let _ = db.update_sync_task(&task_id, 1, "Queued job started...", Some("running"));
+        let result = work().await;
+        drop(permit);
+
+        if let Err(e) = result {
+            let msg = format!("Job failed: {e}");
+            let _ = db.update_sync_task(&task_id, 0, &msg, Some("failed"));
+            let _ = db.set_library_error(&library_id, &msg);
+            let _ = db.log("error", &msg, Some(&library_id));
+        }
+    }
+
     pub fn spawn_sync(&self, library_id: String) -> anyhow::Result<String> {
         let library = self
             .db
@@ -35,7 +72,10 @@ impl TaskManager {
             .ok_or_else(|| anyhow::anyhow!("Library not found"))?;
 
         if library.source_type != "git" {
-            anyhow::bail!("Library source_type is '{}', use upload/fetch instead of git sync", library.source_type);
+            anyhow::bail!(
+                "Library source_type is '{}', use upload/fetch instead of git sync",
+                library.source_type
+            );
         }
 
         let task = self.db.create_sync_task(&library_id)?;
@@ -43,32 +83,30 @@ impl TaskManager {
         let return_task_id = task_id.clone();
 
         let db = self.db.clone();
-        let tx = self.tx.clone();
+        let config = self.config.clone();
         let lib_id = library_id.clone();
         let repo_url = library.repo_url.clone();
         let branch = library.branch.clone();
         let local_path = PathBuf::from(&library.local_path);
         let name = library.name.clone();
+        let this = self.clone();
 
         tokio::spawn(async move {
-            let _ = tx.send(task_id.clone());
-            let result = indexer::sync_library(
-                &db,
-                &task_id,
-                &lib_id,
-                &repo_url,
-                &branch,
-                &local_path,
-                &name,
-            )
+            this.run_job(task_id.clone(), lib_id.clone(), move || async move {
+                indexer::sync_library(
+                    &db,
+                    config.as_ref(),
+                    &task_id,
+                    &lib_id,
+                    &repo_url,
+                    &branch,
+                    &local_path,
+                    &name,
+                )
+                .await
+                .map(|_| ())
+            })
             .await;
-
-            if let Err(e) = result {
-                let msg = format!("Sync failed: {e}");
-                let _ = db.update_sync_task(&task_id, 0, &msg, Some("failed"));
-                let _ = db.set_library_error(&lib_id, &msg);
-                let _ = db.log("error", &msg, Some(&lib_id));
-            }
         });
 
         Ok(return_task_id)
@@ -92,32 +130,28 @@ impl TaskManager {
 
         let db = self.db.clone();
         let config = self.config.clone();
-        let tx = self.tx.clone();
         let lib_id = library_id.clone();
         let local_path = PathBuf::from(&library.local_path);
         let name = library.name.clone();
+        let this = self.clone();
 
         tokio::spawn(async move {
-            let _ = tx.send(task_id.clone());
-            let result = indexer::ingest_files(
-                &db,
-                Some(config.as_ref()),
-                &task_id,
-                &lib_id,
-                &local_path,
-                &name,
-                &relative_paths,
-                use_ai,
-                auto_name,
-            )
+            this.run_job(task_id.clone(), lib_id.clone(), move || async move {
+                indexer::ingest_files(
+                    &db,
+                    Some(config.as_ref()),
+                    &task_id,
+                    &lib_id,
+                    &local_path,
+                    &name,
+                    &relative_paths,
+                    use_ai,
+                    auto_name,
+                )
+                .await
+                .map(|_| ())
+            })
             .await;
-
-            if let Err(e) = result {
-                let msg = format!("Ingest failed: {e}");
-                let _ = db.update_sync_task(&task_id, 0, &msg, Some("failed"));
-                let _ = db.set_library_error(&lib_id, &msg);
-                let _ = db.log("error", &msg, Some(&lib_id));
-            }
         });
 
         Ok(return_task_id)
@@ -150,31 +184,27 @@ impl TaskManager {
 
         let db = self.db.clone();
         let config = self.config.clone();
-        let tx = self.tx.clone();
         let lib_id = library_id.clone();
         let local_path = PathBuf::from(&library.local_path);
         let name = library.name.clone();
+        let this = self.clone();
 
         tokio::spawn(async move {
-            let _ = tx.send(task_id.clone());
-            let result = indexer::fetch_and_ingest(
-                &db,
-                config.as_ref(),
-                &task_id,
-                &lib_id,
-                &local_path,
-                &name,
-                &prompt,
-                auto_name,
-            )
+            this.run_job(task_id.clone(), lib_id.clone(), move || async move {
+                indexer::fetch_and_ingest(
+                    &db,
+                    config.as_ref(),
+                    &task_id,
+                    &lib_id,
+                    &local_path,
+                    &name,
+                    &prompt,
+                    auto_name,
+                )
+                .await
+                .map(|_| ())
+            })
             .await;
-
-            if let Err(e) = result {
-                let msg = format!("AI fetch failed: {e}");
-                let _ = db.update_sync_task(&task_id, 0, &msg, Some("failed"));
-                let _ = db.set_library_error(&lib_id, &msg);
-                let _ = db.log("error", &msg, Some(&lib_id));
-            }
         });
 
         Ok(return_task_id)

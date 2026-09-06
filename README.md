@@ -197,6 +197,9 @@ location / {
 | `COMPIRA_LLM_API_KEY` / `OPENAI_API_KEY` | — | LLM 种子 Key（可在「系统设置」覆盖） |
 | `COMPIRA_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容 Base URL |
 | `COMPIRA_LLM_MODEL` | `gpt-4o-mini` | 模型名 |
+| `COMPIRA_MAX_JOBS` | `3` | 同时运行的组件库任务数（其余排队，避免拖死 API） |
+| `COMPIRA_INGEST_BATCH_SIZE` | `250` | 批量入库事务大小 |
+| `COMPIRA_DOWNLOAD_CONCURRENCY` | `8` | AI 拉取并行下载数 |
 | `RUST_LOG` | `info,compira_mcp=debug` | 日志级别 |
 
 ---

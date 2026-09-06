@@ -7,6 +7,7 @@ export default function LibraryDetail() {
   const { id } = useParams<{ id: string }>();
   const [library, setLibrary] = useState<Library | null>(null);
   const [components, setComponents] = useState<Component[]>([]);
+  const [componentsTotal, setComponentsTotal] = useState(0);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [fwFilter, setFwFilter] = useState("全部");
@@ -23,10 +24,11 @@ export default function LibraryDetail() {
 
   const load = useCallback(() => {
     if (!id) return;
-    Promise.all([api.libraries.get(id), api.libraries.components(id)])
-      .then(([lib, comps]) => {
+    Promise.all([api.libraries.get(id), api.libraries.components(id, { limit: 500, offset: 0 })])
+      .then(([lib, page]) => {
         setLibrary(lib);
-        setComponents(comps);
+        setComponents(page.items);
+        setComponentsTotal(page.total);
       })
       .catch((e) => setError(e.message));
   }, [id]);
@@ -238,7 +240,11 @@ export default function LibraryDetail() {
       <div className="card">
         <div className="card-header">
           <div className="card-title">已索引组件</div>
-          <span className="chip-count">{components.length}</span>
+          <span className="chip-count">
+            {componentsTotal > components.length
+              ? `显示 ${components.length} / 共 ${componentsTotal}`
+              : componentsTotal || components.length}
+          </span>
           <span style={{ flex: 1 }} />
           <div className="search-box" style={{ width: 220, height: 34 }}>
             <svg viewBox="0 0 24 24">

@@ -14,6 +14,12 @@ pub struct Config {
     pub llm_api_key: Option<String>,
     pub llm_base_url: String,
     pub llm_model: String,
+    /// Max concurrent library jobs (sync / ingest / fetch). Extra jobs wait in queue.
+    pub max_jobs: usize,
+    /// Components written per SQLite transaction during bulk ingest.
+    pub ingest_batch_size: usize,
+    /// Max parallel HTTP downloads during AI fetch.
+    pub download_concurrency: usize,
 }
 
 impl Config {
@@ -46,6 +52,9 @@ impl Config {
                 .unwrap_or_else(|_| "https://api.openai.com/v1".into()),
             llm_model: std::env::var("COMPIRA_LLM_MODEL")
                 .unwrap_or_else(|_| "gpt-4o-mini".into()),
+            max_jobs: env_usize("COMPIRA_MAX_JOBS", 3).clamp(1, 64),
+            ingest_batch_size: env_usize("COMPIRA_INGEST_BATCH_SIZE", 250).clamp(20, 5000),
+            download_concurrency: env_usize("COMPIRA_DOWNLOAD_CONCURRENCY", 8).clamp(1, 64),
         }
     }
 
@@ -54,6 +63,13 @@ impl Config {
             .as_ref()
             .is_some_and(|k| !k.trim().is_empty())
     }
+}
+
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 /// Resolve data dir to an absolute path. Avoid `canonicalize` on Windows so we

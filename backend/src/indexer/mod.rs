@@ -5,10 +5,11 @@ use crate::config::Config;
 use crate::db::{Database, LlmSettings};
 use crate::fetcher;
 use crate::git;
-use crate::parser;
+use crate::parser::{self, ParsedBundle};
 
 pub async fn sync_library(
     db: &Database,
+    config: &Config,
     task_id: &str,
     library_id: &str,
     repo_url: &str,
@@ -19,12 +20,26 @@ pub async fn sync_library(
     db.update_library_status(library_id, "syncing", None)?;
     db.update_sync_task(task_id, 5, "Cloning/pulling repository...", None)?;
 
-    git::clone_or_pull(repo_url, branch, local_path)?;
-    db.update_sync_task(task_id, 30, "Repository synced, parsing components...", None)?;
+    let repo_url = repo_url.to_string();
+    let branch = branch.to_string();
+    let local_path_buf = local_path.to_path_buf();
+    tokio::task::spawn_blocking(move || git::clone_or_pull(&repo_url, &branch, &local_path_buf))
+        .await??;
 
+    db.update_sync_task(task_id, 25, "Repository synced, scanning files...", None)?;
     db.clear_library_components(library_id)?;
-    let parsed = parser::scan_and_parse_directory(library_id, local_path)?;
-    store_parsed(db, task_id, library_id, library_name, parsed, None).await
+
+    ingest_directory_chunked(
+        db,
+        config,
+        task_id,
+        library_id,
+        local_path,
+        library_name,
+        true,
+        None,
+    )
+    .await
 }
 
 /// Incrementally ingest specific relative files (upload / fetch). Optionally AI-enrich.
@@ -47,16 +62,13 @@ pub async fn ingest_files(
         None,
     )?;
 
-    let mut parsed = Vec::new();
-    for rel in relative_paths {
-        match parser::parse_component_file(library_id, local_path, rel) {
-            Ok(item) => parsed.push(item),
-            Err(e) => {
-                tracing::warn!("skip {rel}: {e}");
-                let _ = db.log("warn", &format!("Skip {rel}: {e}"), Some(library_id));
-            }
-        }
-    }
+    let library_id_owned = library_id.to_string();
+    let root = local_path.to_path_buf();
+    let paths = relative_paths.to_vec();
+    let parsed = tokio::task::spawn_blocking(move || {
+        parser::parse_paths_parallel(&library_id_owned, &root, &paths)
+    })
+    .await?;
 
     if parsed.is_empty() {
         anyhow::bail!("no valid component files to ingest");
@@ -68,7 +80,6 @@ pub async fn ingest_files(
         None
     };
 
-    // Auto-name: prefer AI; fallback to component / file names
     if auto_name {
         let names: Vec<String> = parsed.iter().map(|(c, _, _, _)| c.name.clone()).collect();
         let files: Vec<String> = relative_paths.to_vec();
@@ -101,13 +112,15 @@ pub async fn ingest_files(
         library_name.to_string()
     };
 
-    store_parsed(
+    let batch_size = config.map(|c| c.ingest_batch_size).unwrap_or(250);
+    store_parsed_batched(
         db,
         task_id,
         library_id,
         &display_name,
         parsed,
         enrich_llm.as_ref(),
+        batch_size,
     )
     .await
 }
@@ -146,12 +159,12 @@ pub async fn fetch_and_ingest(
     db.update_library_status(library_id, "syncing", None)?;
     db.update_sync_task(task_id, 5, "Analyzing request...", None)?;
 
-    // Fast path: user pasted only a repo URL (or URL + 全部) → clone entire repo (LLM optional)
     if let Some((repo_url, branch, whole)) = ai::detect_repo_intent(prompt) {
         if whole {
             let llm = db.get_llm_settings(config).ok();
             return ingest_whole_repo(
                 db,
+                config,
                 task_id,
                 library_id,
                 local_path,
@@ -205,6 +218,7 @@ pub async fn fetch_and_ingest(
             .unwrap_or("main");
         return ingest_whole_repo(
             db,
+            config,
             task_id,
             library_id,
             local_path,
@@ -219,7 +233,11 @@ pub async fn fetch_and_ingest(
 
     let _ = db.log(
         "info",
-        &format!("AI fetch urls ({}): {}", plan.urls.len(), plan.urls.join(" , ")),
+        &format!(
+            "AI fetch urls ({}): {}",
+            plan.urls.len(),
+            plan.urls.join(" , ")
+        ),
         Some(library_id),
     );
 
@@ -230,9 +248,10 @@ pub async fn fetch_and_ingest(
         None,
     )?;
     std::fs::create_dir_all(local_path)?;
-    let written = fetcher::download_urls(&plan.urls, local_path).await?;
+    let written =
+        fetcher::download_urls(&plan.urls, local_path, config.download_concurrency).await?;
 
-    db.update_sync_task(task_id, 40, "Download complete, AI parsing...", None)?;
+    db.update_sync_task(task_id, 40, "Download complete, parsing...", None)?;
     ingest_files(
         db,
         Some(config),
@@ -249,6 +268,7 @@ pub async fn fetch_and_ingest(
 
 async fn ingest_whole_repo(
     db: &Database,
+    config: &Config,
     task_id: &str,
     library_id: &str,
     local_path: &Path,
@@ -270,7 +290,14 @@ async fn ingest_whole_repo(
         Some(library_id),
     );
 
-    let used_branch = git::clone_or_pull_try_branches(repo_url, branch, local_path)?;
+    let repo_url_owned = repo_url.to_string();
+    let branch_owned = branch.to_string();
+    let local_path_buf = local_path.to_path_buf();
+    let used_branch = tokio::task::spawn_blocking(move || {
+        git::clone_or_pull_try_branches(&repo_url_owned, &branch_owned, &local_path_buf)
+    })
+    .await??;
+
     {
         let conn_err = (|| -> anyhow::Result<()> {
             if let Some(mut lib) = db.get_library(library_id)? {
@@ -285,60 +312,149 @@ async fn ingest_whole_repo(
         }
     }
 
-    db.update_sync_task(task_id, 40, "Scanning all component files...", None)?;
-    let parsed = parser::scan_and_parse_directory(library_id, local_path)?;
-    if parsed.is_empty() {
-        anyhow::bail!(
-            "仓库已克隆，但未找到可解析的组件文件（.vue/.uvue/.tsx/.jsx）。分支={used_branch}"
-        );
-    }
-
     let mut display_name = library_name.to_string();
     if auto_name {
-        let names: Vec<String> = parsed.iter().map(|(c, _, _, _)| c.name.clone()).collect();
+        db.update_sync_task(task_id, 35, "Scanning file list for naming...", None)?;
+        let root = local_path.to_path_buf();
+        let sample_paths = tokio::task::spawn_blocking(move || {
+            let mut paths = parser::collect_component_paths(&root, true);
+            paths.truncate(40);
+            paths
+        })
+        .await?;
+        let names: Vec<String> = sample_paths
+            .iter()
+            .filter_map(|p| Path::new(p).file_stem()?.to_str().map(|s| s.to_string()))
+            .collect();
         let suggested = if let Some(settings) = llm.filter(|s| s.enabled()) {
-            db.update_sync_task(task_id, 45, "AI naming library...", None)?;
-            match ai::suggest_library_name(settings, &names, &[]).await {
+            db.update_sync_task(task_id, 40, "AI naming library...", None)?;
+            match ai::suggest_library_name(settings, &names, &sample_paths).await {
                 Ok(n) => n,
                 Err(_) => names
                     .first()
-                    .map(|n| format!("{n} 等 {} 个组件", names.len()))
+                    .cloned()
                     .unwrap_or_else(|| "Git 组件库".into()),
             }
         } else {
             names
                 .first()
-                .map(|n| format!("{n} 等 {} 个组件", names.len()))
+                .map(|n| format!("{n} 组件库"))
                 .unwrap_or_else(|| "Git 组件库".into())
         };
         let _ = db.update_library_name(library_id, &suggested);
         display_name = suggested;
     }
 
-    db.update_sync_task(
+    db.clear_library_components(library_id)?;
+    ingest_directory_chunked(
+        db,
+        config,
         task_id,
-        55,
-        &format!(
-            "Indexing {} components (bulk, no per-file AI enrich)...",
-            parsed.len()
-        ),
+        library_id,
+        local_path,
+        &display_name,
+        true,
         None,
-    )?;
-    store_parsed(db, task_id, library_id, &display_name, parsed, None).await
+    )
+    .await
 }
 
-async fn store_parsed(
+/// Stream: collect paths → parse/write in batches (bounded memory).
+async fn ingest_directory_chunked(
+    db: &Database,
+    config: &Config,
+    task_id: &str,
+    library_id: &str,
+    local_path: &Path,
+    library_name: &str,
+    bulk: bool,
+    llm: Option<&LlmSettings>,
+) -> anyhow::Result<usize> {
+    db.update_sync_task(task_id, 40, "Collecting component file paths...", None)?;
+    let root = local_path.to_path_buf();
+    let paths = tokio::task::spawn_blocking(move || parser::collect_component_paths(&root, bulk))
+        .await?;
+
+    if paths.is_empty() {
+        anyhow::bail!("未找到可解析的组件文件（.vue/.uvue/.tsx/.jsx）");
+    }
+
+    let total = paths.len();
+    let batch_size = config.ingest_batch_size;
+    db.update_sync_task(
+        task_id,
+        45,
+        &format!("Indexing {total} components in batches of {batch_size}..."),
+        None,
+    )?;
+
+    let mut processed = 0usize;
+    for (chunk_idx, chunk) in paths.chunks(batch_size).enumerate() {
+        let library_id_owned = library_id.to_string();
+        let root = local_path.to_path_buf();
+        let chunk_owned = chunk.to_vec();
+        let mut parsed = tokio::task::spawn_blocking(move || {
+            parser::parse_paths_parallel(&library_id_owned, &root, &chunk_owned)
+        })
+        .await?;
+
+        if let Some(settings) = llm.filter(|s| s.enabled()) {
+            for (component, source, docs, examples) in &mut parsed {
+                match ai::enrich_component(settings, component, source).await {
+                    Ok(enrichment) => {
+                        apply_enrichment(component, docs, examples, enrichment);
+                    }
+                    Err(e) => {
+                        tracing::warn!("AI enrich failed for {}: {e}", component.name);
+                    }
+                }
+            }
+        }
+
+        let batch = parsed;
+        let n = batch.len();
+        db.upsert_components_batch(library_name, &batch)?;
+        processed += n;
+
+        let progress = 45 + ((processed * 50) / total.max(1)) as i32;
+        // Update progress every batch (not every file) to keep DB responsive
+        if chunk_idx % 1 == 0 || processed == total {
+            db.update_sync_task(
+                task_id,
+                progress.min(95),
+                &format!("Indexed {processed}/{total} components"),
+                None,
+            )?;
+        }
+        // Yield so HTTP/MCP can run between batches
+        tokio::task::yield_now().await;
+    }
+
+    let count = db.count_library_components(library_id)?;
+    db.update_library_status(library_id, "ready", Some(count))?;
+    db.update_sync_task(
+        task_id,
+        100,
+        &format!("Ingest completed: {processed} components processed, library has {count}"),
+        Some("completed"),
+    )?;
+    db.log(
+        "info",
+        &format!("Library '{library_name}' ingested {processed} components (total {count})"),
+        Some(library_id),
+    )?;
+
+    Ok(processed)
+}
+
+async fn store_parsed_batched(
     db: &Database,
     task_id: &str,
     library_id: &str,
     library_name: &str,
-    parsed: Vec<(
-        crate::db::Component,
-        String,
-        String,
-        Vec<(String, String)>,
-    )>,
+    mut parsed: Vec<ParsedBundle>,
     llm: Option<&LlmSettings>,
+    batch_size: usize,
 ) -> anyhow::Result<usize> {
     let total = parsed.len();
     db.update_sync_task(
@@ -348,55 +464,42 @@ async fn store_parsed(
         None,
     )?;
 
-    for (i, (mut component, source, mut docs, mut examples)) in parsed.into_iter().enumerate() {
-        if let Ok(Some(existing_id)) =
-            db.get_component_id_by_path(library_id, &component.file_path)
-        {
-            component.id = existing_id;
-        }
-
-        if let Some(settings) = llm {
-            if settings.enabled() {
-                db.update_sync_task(
-                    task_id,
-                    50 + ((i * 40) / total.max(1)) as i32,
-                    &format!("AI enriching {}...", component.name),
-                    None,
-                )?;
-                match ai::enrich_component(settings, &component, &source).await {
-                    Ok(enrichment) => {
-                        apply_enrichment(&mut component, &mut docs, &mut examples, enrichment);
-                    }
-                    Err(e) => {
-                        tracing::warn!("AI enrich failed for {}: {e}", component.name);
-                        let _ = db.log(
-                            "warn",
-                            &format!("AI enrich failed for {}: {e}", component.name),
-                            Some(library_id),
-                        );
-                    }
+    if let Some(settings) = llm.filter(|s| s.enabled()) {
+        for (i, (component, source, docs, examples)) in parsed.iter_mut().enumerate() {
+            db.update_sync_task(
+                task_id,
+                50 + ((i * 30) / total.max(1)) as i32,
+                &format!("AI enriching {} ({}/{})...", component.name, i + 1, total),
+                None,
+            )?;
+            match ai::enrich_component(settings, component, source).await {
+                Ok(enrichment) => {
+                    apply_enrichment(component, docs, examples, enrichment);
+                }
+                Err(e) => {
+                    tracing::warn!("AI enrich failed for {}: {e}", component.name);
+                    let _ = db.log(
+                        "warn",
+                        &format!("AI enrich failed for {}: {e}", component.name),
+                        Some(library_id),
+                    );
                 }
             }
         }
+    }
 
-        db.upsert_component(&component, &source)?;
-        if !docs.is_empty() {
-            db.set_component_docs(&component.id, &docs)?;
-        }
-        if !examples.is_empty() {
-            db.set_component_examples(&component.id, &examples)?;
-        }
-        db.index_component(&component, library_name, &source)?;
-
-        if total > 0 {
-            let progress = 50 + ((i + 1) * 45 / total) as i32;
-            db.update_sync_task(
-                task_id,
-                progress,
-                &format!("Indexed {}/{} components", i + 1, total),
-                None,
-            )?;
-        }
+    let mut processed = 0usize;
+    for chunk in parsed.chunks(batch_size) {
+        db.upsert_components_batch(library_name, chunk)?;
+        processed += chunk.len();
+        let progress = 80 + ((processed * 15) / total.max(1)) as i32;
+        db.update_sync_task(
+            task_id,
+            progress.min(95),
+            &format!("Indexed {processed}/{total} components"),
+            None,
+        )?;
+        tokio::task::yield_now().await;
     }
 
     let count = db.count_library_components(library_id)?;

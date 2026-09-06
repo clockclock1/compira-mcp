@@ -51,6 +51,7 @@ pub fn routes(state: AppState) -> Router {
         .route("/tasks/{id}", get(get_task))
         .route("/api-keys", get(list_api_keys).post(create_api_key))
         .route("/api-keys/{id}", delete(delete_api_key))
+        .route("/api-keys/{id}/regenerate", post(regenerate_api_key))
         .route("/logs", get(list_logs))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -489,11 +490,29 @@ async fn sync_library(
 async fn list_components(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(q): Query<ListComponentsQuery>,
 ) -> impl IntoResponse {
-    match state.db.list_components_by_library(&id) {
-        Ok(items) => Json(items).into_response(),
+    let limit = q.limit.unwrap_or(500).clamp(1, 10_000);
+    let offset = q.offset.unwrap_or(0).max(0);
+    match state
+        .db
+        .list_components_by_library_page(&id, limit, offset)
+    {
+        Ok((items, total)) => Json(serde_json::json!({
+            "items": items,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }))
+        .into_response(),
         Err(e) => err_response(e),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct ListComponentsQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
 }
 
 async fn get_component(
@@ -622,15 +641,7 @@ struct CreateApiKeyReq {
 
 #[derive(Serialize)]
 struct CreateApiKeyResp {
-    key: ApiKeyWithSecret,
-}
-
-#[derive(Serialize)]
-struct ApiKeyWithSecret {
-    id: String,
-    name: String,
-    key: String,
-    key_prefix: String,
+    key: crate::db::ApiKey,
 }
 
 async fn create_api_key(
@@ -639,18 +650,18 @@ async fn create_api_key(
 ) -> impl IntoResponse {
     let raw_key = generate_api_key();
     match state.db.create_api_key(&req.name, &raw_key) {
-        Ok(k) => (
-            StatusCode::CREATED,
-            Json(CreateApiKeyResp {
-                key: ApiKeyWithSecret {
-                    id: k.id,
-                    name: k.name,
-                    key: raw_key,
-                    key_prefix: k.key_prefix,
-                },
-            }),
-        )
-            .into_response(),
+        Ok(k) => (StatusCode::CREATED, Json(CreateApiKeyResp { key: k })).into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn regenerate_api_key(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let raw_key = generate_api_key();
+    match state.db.regenerate_api_key(&id, &raw_key) {
+        Ok(k) => Json(CreateApiKeyResp { key: k }).into_response(),
         Err(e) => err_response(e),
     }
 }

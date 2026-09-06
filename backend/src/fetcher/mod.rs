@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
+
+use tokio::sync::Semaphore;
 
 /// Download a remote file into the library directory.
 /// Returns the relative path (posix-style) written under `root`.
@@ -88,22 +91,47 @@ fn write_download(root: &Path, url: &str, bytes: &[u8]) -> anyhow::Result<String
     Ok(rel.to_string_lossy().replace('\\', "/"))
 }
 
-pub async fn download_urls(urls: &[String], root: &Path) -> anyhow::Result<Vec<String>> {
+pub async fn download_urls(
+    urls: &[String],
+    root: &Path,
+    concurrency: usize,
+) -> anyhow::Result<Vec<String>> {
     std::fs::create_dir_all(root)?;
+    let concurrency = concurrency.clamp(1, 64);
+    let sem = Arc::new(Semaphore::new(concurrency));
+    let root = root.to_path_buf();
+    let mut joins = Vec::with_capacity(urls.len());
+
+    for url in urls {
+        let url = url.clone();
+        let root = root.clone();
+        let sem = sem.clone();
+        joins.push(tokio::spawn(async move {
+            let _permit = sem.acquire().await.ok()?;
+            match download_url(&url, &root).await {
+                Ok(rel) => {
+                    tracing::info!("downloaded {url} -> {rel}");
+                    Some(Ok(rel))
+                }
+                Err(e) => {
+                    tracing::warn!("skip url {url}: {e}");
+                    Some(Err(format!("{url}: {e}")))
+                }
+            }
+        }));
+    }
+
     let mut written = Vec::new();
     let mut errors = Vec::new();
-    for url in urls {
-        match download_url(url, root).await {
-            Ok(rel) => {
-                tracing::info!("downloaded {url} -> {rel}");
-                written.push(rel);
-            }
-            Err(e) => {
-                tracing::warn!("skip url {url}: {e}");
-                errors.push(format!("{url}: {e}"));
-            }
+    for join in joins {
+        match join.await {
+            Ok(Some(Ok(rel))) => written.push(rel),
+            Ok(Some(Err(e))) => errors.push(e),
+            Ok(None) => errors.push("download slot closed".into()),
+            Err(e) => errors.push(format!("download task join: {e}")),
         }
     }
+
     if written.is_empty() {
         let detail = if errors.is_empty() {
             "no urls provided".into()

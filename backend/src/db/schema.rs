@@ -5,6 +5,11 @@ pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
         "
         PRAGMA journal_mode = WAL;
         PRAGMA foreign_keys = ON;
+        PRAGMA busy_timeout = 30000;
+        PRAGMA synchronous = NORMAL;
+        PRAGMA temp_store = MEMORY;
+        PRAGMA cache_size = -65536;
+        PRAGMA mmap_size = 268435456;
 
         CREATE TABLE IF NOT EXISTS libraries (
             id TEXT PRIMARY KEY,
@@ -51,6 +56,7 @@ pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             name TEXT NOT NULL,
             key_hash TEXT NOT NULL UNIQUE,
             key_prefix TEXT NOT NULL,
+            key_secret TEXT,
             created_at TEXT NOT NULL,
             last_used_at TEXT
         );
@@ -124,12 +130,24 @@ pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE libraries ADD COLUMN last_error TEXT",
         [],
     );
+    let _ = conn.execute("ALTER TABLE api_keys ADD COLUMN key_secret TEXT", []);
     let _ = conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL DEFAULT '',
             updated_at TEXT NOT NULL
         );",
+    );
+
+    let _ = conn.execute_batch(
+        "
+        CREATE INDEX IF NOT EXISTS idx_components_library ON components(library_id);
+        CREATE INDEX IF NOT EXISTS idx_components_library_name ON components(library_id, name);
+        CREATE INDEX IF NOT EXISTS idx_sync_tasks_library ON sync_tasks(library_id);
+        CREATE INDEX IF NOT EXISTS idx_sync_tasks_status ON sync_tasks(status);
+        CREATE INDEX IF NOT EXISTS idx_component_examples_cid ON component_examples(component_id);
+        CREATE INDEX IF NOT EXISTS idx_app_logs_created ON app_logs(created_at);
+        ",
     );
 
     Ok(())

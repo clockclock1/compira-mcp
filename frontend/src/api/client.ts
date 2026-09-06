@@ -73,6 +73,8 @@ export interface ApiKey {
   id: string;
   name: string;
   key_prefix: string;
+  /** Full secret when available (admin UI). */
+  key?: string | null;
   created_at: string;
   last_used_at: string | null;
 }
@@ -118,7 +120,16 @@ export const api = {
   libraries: {
     list: () => request<Library[]>("/libraries"),
     get: (id: string) => request<Library>(`/libraries/${id}`),
-    components: (id: string) => request<Component[]>(`/libraries/${id}/components`),
+    components: (id: string, opts?: { limit?: number; offset?: number }) => {
+      const limit = opts?.limit ?? 500;
+      const offset = opts?.offset ?? 0;
+      return request<{
+        items: Component[];
+        total: number;
+        limit: number;
+        offset: number;
+      }>(`/libraries/${id}/components?limit=${limit}&offset=${offset}`);
+    },
     create: (data: {
       name: string;
       repo_url?: string;
@@ -197,10 +208,12 @@ export const api = {
   apiKeys: {
     list: () => request<ApiKey[]>("/api-keys"),
     create: (name: string) =>
-      request<{ key: { id: string; name: string; key: string; key_prefix: string } }>(
-        "/api-keys",
-        { method: "POST", body: JSON.stringify({ name }) },
-      ),
+      request<{ key: ApiKey }>("/api-keys", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      }),
+    regenerate: (id: string) =>
+      request<{ key: ApiKey }>(`/api-keys/${id}/regenerate`, { method: "POST" }),
     delete: (id: string) => request<void>(`/api-keys/${id}`, { method: "DELETE" }),
   },
   logs: (limit = 100) => request<LogEntry[]>(`/logs?limit=${limit}`),

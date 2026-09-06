@@ -1,12 +1,18 @@
 use regex::Regex;
+use rayon::prelude::*;
 use std::path::Path;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::db::{Component, EventDef, PropDef, SlotDef};
 
+/// Explicit uploads / single-file paths may include script modules.
 const COMPONENT_EXTENSIONS: &[&str] = &["vue", "uvue", "tsx", "jsx", "ts", "js"];
+/// Whole-repo bulk scan: UI component files only (avoids indexing every .ts/.js util).
+const BULK_COMPONENT_EXTENSIONS: &[&str] = &["vue", "uvue", "tsx", "jsx"];
 const QUOTED: &str = r#"['"]([^'"]+)['"]"#;
+
+pub type ParsedBundle = (Component, String, String, Vec<(String, String)>);
 
 fn capture_all(re: &Regex, text: &str) -> Vec<String> {
     re.captures_iter(text)
@@ -18,12 +24,16 @@ pub fn is_component_extension(ext: &str) -> bool {
     COMPONENT_EXTENSIONS.contains(&ext.to_lowercase().as_str())
 }
 
+fn is_bulk_component_extension(ext: &str) -> bool {
+    BULK_COMPONENT_EXTENSIONS.contains(&ext.to_lowercase().as_str())
+}
+
 /// Parse a single component file relative to `root`.
 pub fn parse_component_file(
     library_id: &str,
     root: &Path,
     relative_path: &str,
-) -> anyhow::Result<(Component, String, String, Vec<(String, String)>)> {
+) -> anyhow::Result<ParsedBundle> {
     let path = root.join(relative_path);
     let ext = path
         .extension()
@@ -62,7 +72,11 @@ fn detect_framework(root: &Path, ext: &str, source: &str) -> String {
     if ext == "uvue" || is_uniapp_project(root) {
         return "uni-app".into();
     }
-    if matches!(ext, "tsx" | "jsx") || source.contains("React.") || source.contains("from \"react\"") || source.contains("from 'react'") {
+    if matches!(ext, "tsx" | "jsx")
+        || source.contains("React.")
+        || source.contains("from \"react\"")
+        || source.contains("from 'react'")
+    {
         return "react".into();
     }
     if matches!(ext, "vue") {
@@ -88,12 +102,9 @@ fn parse_script_component(source: &str, file_path: &str, framework: &str) -> Par
     }
 }
 
-pub fn scan_and_parse_directory(
-    library_id: &str,
-    root: &Path,
-) -> anyhow::Result<Vec<(Component, String, String, Vec<(String, String)>)>> {
-    let mut results = Vec::new();
-
+/// Collect relative component paths under `root` without loading file contents.
+pub fn collect_component_paths(root: &Path, bulk: bool) -> Vec<String> {
+    let mut paths = Vec::new();
     for entry in WalkDir::new(root)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -105,57 +116,50 @@ pub fn scan_and_parse_directory(
             .and_then(|e| e.to_str())
             .unwrap_or_default()
             .to_lowercase();
-
-        if !COMPONENT_EXTENSIONS.contains(&ext.as_str()) {
+        let ok = if bulk {
+            is_bulk_component_extension(&ext)
+        } else {
+            is_component_extension(&ext)
+        };
+        if !ok || should_skip(path) {
             continue;
         }
-
-        if should_skip(path) {
-            continue;
-        }
-
-        let source = std::fs::read_to_string(path)?;
-        let rel_path = path
+        let rel = path
             .strip_prefix(root)
             .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/");
-
-        let framework = if is_uniapp_project(root) || ext == "uvue" {
-            "uni-app".to_string()
-        } else if matches!(ext.as_str(), "tsx" | "jsx") {
-            "react".to_string()
-        } else if ext == "vue" {
-            "vue".to_string()
-        } else {
-            detect_framework(root, &ext, &source)
-        };
-
-        let parsed = if matches!(ext.as_str(), "vue" | "uvue") {
-            parse_vue_component(&source, &rel_path, &framework)
-        } else {
-            parse_script_component(&source, &rel_path, &framework)
-        };
-        let docs = find_docs(path);
-        let examples = find_examples(path, &parsed.name);
-
-        let component = Component {
-            id: Uuid::new_v4().to_string(),
-            library_id: library_id.to_string(),
-            name: parsed.name,
-            file_path: rel_path,
-            framework: framework.to_string(),
-            description: parsed.description,
-            props: parsed.props,
-            events: parsed.events,
-            slots: parsed.slots,
-            tags: parsed.tags,
-        };
-
-        results.push((component, source, docs, examples));
+        paths.push(rel);
     }
+    paths
+}
 
-    Ok(results)
+/// Parallel parse of relative paths. Failures are logged and skipped.
+pub fn parse_paths_parallel(
+    library_id: &str,
+    root: &Path,
+    relative_paths: &[String],
+) -> Vec<ParsedBundle> {
+    let root = root.to_path_buf();
+    let library_id = library_id.to_string();
+    relative_paths
+        .par_iter()
+        .filter_map(|rel| match parse_component_file(&library_id, &root, rel) {
+            Ok(item) => Some(item),
+            Err(e) => {
+                tracing::warn!("skip {rel}: {e}");
+                None
+            }
+        })
+        .collect()
+}
+
+pub fn scan_and_parse_directory(
+    library_id: &str,
+    root: &Path,
+) -> anyhow::Result<Vec<ParsedBundle>> {
+    let paths = collect_component_paths(root, true);
+    Ok(parse_paths_parallel(library_id, root, &paths))
 }
 
 fn should_skip(path: &Path) -> bool {

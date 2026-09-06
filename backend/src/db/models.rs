@@ -84,6 +84,9 @@ pub struct ApiKey {
     pub id: String,
     pub name: String,
     pub key_prefix: String,
+    /// Full secret for admin UI (always available for keys created after this feature).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,
 }

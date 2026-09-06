@@ -21,6 +21,18 @@ impl Database {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(path)?;
+        // Runtime pragmas (also set in schema init; re-apply for existing DBs)
+        let _ = conn.execute_batch(
+            "
+            PRAGMA journal_mode = WAL;
+            PRAGMA foreign_keys = ON;
+            PRAGMA busy_timeout = 30000;
+            PRAGMA synchronous = NORMAL;
+            PRAGMA temp_store = MEMORY;
+            PRAGMA cache_size = -65536;
+            PRAGMA mmap_size = 268435456;
+            ",
+        );
         init_schema(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -255,6 +267,14 @@ impl Database {
 
     pub fn upsert_component(&self, component: &Component, source: &str) -> anyhow::Result<()> {
         let conn = self.conn.lock().unwrap();
+        Self::upsert_component_conn(&conn, component, source)
+    }
+
+    fn upsert_component_conn(
+        conn: &Connection,
+        component: &Component,
+        source: &str,
+    ) -> anyhow::Result<()> {
         conn.execute(
             "INSERT INTO components (id, library_id, name, file_path, framework, description, props_json, events_json, slots_json, tags_json, source_content)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
@@ -281,6 +301,104 @@ impl Database {
                 source,
             ],
         )?;
+        Ok(())
+    }
+
+    /// Bulk upsert components + docs + examples + FTS in one transaction.
+    pub fn upsert_components_batch(
+        &self,
+        library_name: &str,
+        items: &[(Component, String, String, Vec<(String, String)>)],
+    ) -> anyhow::Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+
+        // Preserve stable ids for paths in this batch only (avoid full-library map)
+        let library_id = &items[0].0.library_id;
+        let mut existing: std::collections::HashMap<String, String> =
+            std::collections::HashMap::with_capacity(items.len());
+        {
+            let mut stmt = tx.prepare(
+                "SELECT id FROM components WHERE library_id = ?1 AND file_path = ?2",
+            )?;
+            for (component, _, _, _) in items {
+                if let Ok(Some(id)) = stmt
+                    .query_row(params![library_id, &component.file_path], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .optional()
+                {
+                    existing.insert(component.file_path.clone(), id);
+                }
+            }
+        }
+
+        for (component, source, docs, examples) in items {
+            let mut component = component.clone();
+            if let Some(id) = existing.get(&component.file_path) {
+                component.id = id.clone();
+            }
+
+            Self::upsert_component_conn(&tx, &component, source)?;
+
+            if !docs.is_empty() {
+                tx.execute(
+                    "INSERT INTO component_docs (component_id, content) VALUES (?1, ?2)
+                     ON CONFLICT(component_id) DO UPDATE SET content = excluded.content",
+                    params![component.id, docs],
+                )?;
+            }
+
+            tx.execute(
+                "DELETE FROM component_examples WHERE component_id = ?1",
+                [&component.id],
+            )?;
+            for (title, code) in examples {
+                tx.execute(
+                    "INSERT INTO component_examples (id, component_id, title, code) VALUES (?1, ?2, ?3, ?4)",
+                    params![Uuid::new_v4().to_string(), component.id, title, code],
+                )?;
+            }
+
+            tx.execute(
+                "DELETE FROM components_fts WHERE component_id = ?1",
+                [&component.id],
+            )?;
+            let props_text: String = component
+                .props
+                .iter()
+                .map(|p| format!("{} {}", p.name, p.description.as_deref().unwrap_or("")))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let events_text: String = component
+                .events
+                .iter()
+                .map(|e| e.name.clone())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let tags_text = component.tags.join(" ");
+            let snippet: String = source.chars().take(2000).collect();
+            tx.execute(
+                "INSERT INTO components_fts (component_id, library_id, library_name, name, description, props_text, events_text, tags_text, source_snippet)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    component.id,
+                    component.library_id,
+                    library_name,
+                    component.name,
+                    component.description,
+                    props_text,
+                    events_text,
+                    tags_text,
+                    snippet,
+                ],
+            )?;
+        }
+
+        tx.commit()?;
         Ok(())
     }
 
@@ -314,12 +432,14 @@ impl Database {
     }
 
     pub fn clear_library_components(&self, library_id: &str) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
             "DELETE FROM components_fts WHERE library_id = ?1",
             [library_id],
         )?;
-        conn.execute("DELETE FROM components WHERE library_id = ?1", [library_id])?;
+        tx.execute("DELETE FROM components WHERE library_id = ?1", [library_id])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -565,12 +685,30 @@ impl Database {
     }
 
     pub fn list_components_by_library(&self, library_id: &str) -> anyhow::Result<Vec<Component>> {
+        self.list_components_by_library_page(library_id, 10_000, 0)
+            .map(|(items, _)| items)
+    }
+
+    /// Paginated component list (no source_content). Returns (items, total).
+    pub fn list_components_by_library_page(
+        &self,
+        library_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> anyhow::Result<(Vec<Component>, i64)> {
         let conn = self.conn.lock().unwrap();
+        let total: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM components WHERE library_id = ?1",
+            [library_id],
+            |r| r.get(0),
+        )?;
+        let limit = limit.clamp(1, 50_000);
+        let offset = offset.max(0);
         let mut stmt = conn.prepare(
             "SELECT id, library_id, name, file_path, framework, description, props_json, events_json, slots_json, tags_json
-             FROM components WHERE library_id = ?1 ORDER BY name",
+             FROM components WHERE library_id = ?1 ORDER BY name LIMIT ?2 OFFSET ?3",
         )?;
-        let rows = stmt.query_map([library_id], |row| {
+        let rows = stmt.query_map(params![library_id, limit, offset], |row| {
             Ok(Component {
                 id: row.get(0)?,
                 library_id: row.get(1)?,
@@ -584,7 +722,42 @@ impl Database {
                 tags: serde_json::from_str(&row.get::<_, String>(9)?).unwrap_or_default(),
             })
         })?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        Ok((rows.filter_map(|r| r.ok()).collect(), total))
+    }
+
+    /// Lookup components by exact names (for validate without full-table scan into app memory of unrelated rows).
+    pub fn find_components_by_names(
+        &self,
+        library_id: &str,
+        names: &[String],
+    ) -> anyhow::Result<Vec<Component>> {
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut out = Vec::new();
+        let mut stmt = conn.prepare(
+            "SELECT id, library_id, name, file_path, framework, description, props_json, events_json, slots_json, tags_json
+             FROM components WHERE library_id = ?1 AND name = ?2",
+        )?;
+        for name in names {
+            let rows = stmt.query_map(params![library_id, name], |row| {
+                Ok(Component {
+                    id: row.get(0)?,
+                    library_id: row.get(1)?,
+                    name: row.get(2)?,
+                    file_path: row.get(3)?,
+                    framework: row.get(4)?,
+                    description: row.get(5)?,
+                    props: serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or_default(),
+                    events: serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or_default(),
+                    slots: serde_json::from_str(&row.get::<_, String>(8)?).unwrap_or_default(),
+                    tags: serde_json::from_str(&row.get::<_, String>(9)?).unwrap_or_default(),
+                })
+            })?;
+            out.extend(rows.filter_map(|r| r.ok()));
+        }
+        Ok(out)
     }
 
     pub fn bootstrap_admin_key(&self, key: &str) -> anyhow::Result<bool> {
@@ -605,13 +778,15 @@ impl Database {
         let now = Utc::now();
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, name, hash, prefix, now.to_rfc3339()],
+            "INSERT INTO api_keys (id, name, key_hash, key_prefix, key_secret, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, name, hash, prefix, key, now.to_rfc3339()],
         )?;
         Ok(ApiKey {
             id,
             name: name.into(),
             key_prefix: prefix,
+            key: Some(key.to_string()),
             created_at: now,
             last_used_at: None,
         })
@@ -620,20 +795,42 @@ impl Database {
     pub fn list_api_keys(&self) -> anyhow::Result<Vec<ApiKey>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, key_prefix, created_at, last_used_at FROM api_keys ORDER BY created_at DESC",
+            "SELECT id, name, key_prefix, key_secret, created_at, last_used_at
+             FROM api_keys ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
+            let secret: Option<String> = row.get(3)?;
             Ok(ApiKey {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 key_prefix: row.get(2)?,
-                created_at: row.get::<_, String>(3)?.parse().unwrap_or_else(|_| Utc::now()),
+                key: secret.filter(|s| !s.is_empty()),
+                created_at: row.get::<_, String>(4)?.parse().unwrap_or_else(|_| Utc::now()),
                 last_used_at: row
-                    .get::<_, Option<String>>(4)?
+                    .get::<_, Option<String>>(5)?
                     .and_then(|s| s.parse().ok()),
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Rotate secret for an existing key (keeps id/name). Returns updated record with new secret.
+    pub fn regenerate_api_key(&self, id: &str, new_key: &str) -> anyhow::Result<ApiKey> {
+        let hash = hash_key(new_key);
+        let prefix = new_key.chars().take(8).collect::<String>();
+        let conn = self.conn.lock().unwrap();
+        let updated = conn.execute(
+            "UPDATE api_keys SET key_hash = ?1, key_prefix = ?2, key_secret = ?3 WHERE id = ?4",
+            params![hash, prefix, new_key, id],
+        )?;
+        if updated == 0 {
+            anyhow::bail!("API key not found");
+        }
+        drop(conn);
+        self.list_api_keys()?
+            .into_iter()
+            .find(|k| k.id == id)
+            .ok_or_else(|| anyhow::anyhow!("API key not found after regenerate"))
     }
 
     pub fn delete_api_key(&self, id: &str) -> anyhow::Result<()> {
@@ -668,15 +865,15 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO sync_tasks (id, library_id, status, progress, message, started_at)
-             VALUES (?1, ?2, 'running', 0, 'Starting sync...', ?3)",
+             VALUES (?1, ?2, 'pending', 0, 'Waiting for job slot...', ?3)",
             params![id, library_id, now.to_rfc3339()],
         )?;
         Ok(SyncTask {
             id,
             library_id: library_id.into(),
-            status: "running".into(),
+            status: "pending".into(),
             progress: 0,
-            message: "Starting sync...".into(),
+            message: "Waiting for job slot...".into(),
             started_at: now,
             finished_at: None,
         })
