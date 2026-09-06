@@ -95,6 +95,10 @@ impl TaskManager {
         self.limiter.max()
     }
 
+    pub fn active_jobs(&self) -> usize {
+        self.limiter.active.load(Ordering::Relaxed)
+    }
+
     async fn run_job<F, Fut>(&self, task_id: String, library_id: String, work: F)
     where
         F: FnOnce() -> Fut + Send + 'static,

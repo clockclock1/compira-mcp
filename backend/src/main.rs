@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::PathBuf;
 
 use axum::{
     extract::State,
@@ -41,6 +41,7 @@ async fn main() -> anyhow::Result<()> {
     let _ = db.bootstrap_llm_settings(&config);
     let _ = db.bootstrap_sync_settings(&config);
     let _ = db.bootstrap_auth_settings(&config);
+    let _ = db.bootstrap_cleanup_settings();
 
     let admin_password = config
         .admin_password
@@ -72,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
     let tasks = TaskManager::new(db.clone(), config.clone());
     let state = AppState::new(db.clone(), tasks, config.clone());
 
-    let mcp_service = create_mcp_service(db.clone());
+    let mcp_service = create_mcp_service(db.clone(), state.mcp_activity.clone());
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -88,24 +89,26 @@ async fn main() -> anyhow::Result<()> {
             mcp_auth_middleware,
         ));
 
-    let static_dir = std::env::var("COMPIRA_STATIC_DIR")
-        .unwrap_or_else(|_| "../frontend/dist".into());
-
+    // API + MCP first; frontend is served at `/` and as SPA fallback (refresh-safe).
     let mut app = Router::new()
-        .route("/", get(index))
         .nest("/api", api_router)
         .merge(mcp_router);
 
-    let index_file = Path::new(&static_dir).join("index.html");
-    if index_file.exists() {
+    if let Some(static_dir) = resolve_static_dir() {
+        let index_file = static_dir.join("index.html");
         let static_service = ServeDir::new(&static_dir)
-            .not_found_service(ServeFile::new(index_file));
-        app = app.fallback_service(static_service);
-        tracing::info!("Serving static files from {static_dir}");
+            .append_index_html_on_directories(true)
+            .not_found_service(ServeFile::new(index_file.clone()));
+        // Prefer real admin UI at `/` (do not register stub route that shadows dist).
+        app = app
+            .route_service("/", ServeFile::new(index_file))
+            .fallback_service(static_service);
+        tracing::info!("Serving admin UI from {}", static_dir.display());
     } else {
+        app = app.route("/", get(index_stub));
         tracing::warn!(
-            "Static dir not found ({static_dir}), Admin UI static files disabled. \
-             Run `npm run build` in frontend/ or use dev.bat with Vite on :5173."
+            "Admin UI static files not found. Run `npm run build` in frontend/, \
+             set COMPIRA_STATIC_DIR, or use Vite on :5173 (dev.bat)."
         );
     }
 
@@ -128,6 +131,62 @@ async fn main() -> anyhow::Result<()> {
                 ticker.tick().await;
                 if let Err(e) = db_cleanup.cleanup_expired_sessions() {
                     tracing::warn!("session cleanup failed: {e}");
+                }
+            }
+        });
+    }
+
+    // Scheduled storage maintenance (orphan repos, old logs/tasks, WAL).
+    {
+        let db_maint = db.clone();
+        let config_maint = config.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(600));
+            loop {
+                ticker.tick().await;
+                let schedule = match db_maint.get_cleanup_schedule() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!("read cleanup schedule: {e}");
+                        continue;
+                    }
+                };
+                if !schedule.enabled {
+                    continue;
+                }
+                let due = match &schedule.last_run_at {
+                    None => true,
+                    Some(iso) => match iso.parse::<chrono::DateTime<chrono::Utc>>() {
+                        Ok(t) => {
+                            let elapsed = chrono::Utc::now().signed_duration_since(t);
+                            elapsed
+                                >= chrono::Duration::hours(schedule.interval_hours as i64)
+                        }
+                        Err(_) => true,
+                    },
+                };
+                if !due {
+                    continue;
+                }
+                let opts = compira_mcp::storage::CleanupOptions::from(&schedule);
+                let db2 = db_maint.clone();
+                let cfg2 = config_maint.clone();
+                match tokio::task::spawn_blocking(move || {
+                    compira_mcp::storage::run_cleanup(&db2, &cfg2, opts)
+                })
+                .await
+                {
+                    Ok(Ok(r)) => {
+                        let summary = compira_mcp::storage::format_cleanup_summary(&r);
+                        let _ = db_maint.record_cleanup_run(
+                            &compira_mcp::storage::now_rfc3339(),
+                            &summary,
+                        );
+                        tracing::info!("Scheduled cleanup finished: {summary}");
+                        let _ = db_maint.log("info", &format!("Scheduled cleanup: {summary}"), None);
+                    }
+                    Ok(Err(e)) => tracing::warn!("scheduled cleanup failed: {e}"),
+                    Err(e) => tracing::warn!("scheduled cleanup join: {e}"),
                 }
             }
         });
@@ -161,12 +220,21 @@ async fn mcp_auth_middleware(
         });
 
     if let Some(k) = key {
-        if state.verify_key(k).await {
-            return Ok(next.run(request).await);
+        if let Some((id, name)) = state.resolve_key(k).await {
+            let caller = compira_mcp::mcp::activity::McpCaller::mcp(Some(id), Some(name));
+            return Ok(compira_mcp::mcp::activity::CURRENT_MCP_CALLER
+                .scope(caller, next.run(request))
+                .await);
         }
         if let Some(admin) = &state.config.admin_api_key {
             if k == admin.as_str() {
-                return Ok(next.run(request).await);
+                let caller = compira_mcp::mcp::activity::McpCaller::mcp(
+                    None,
+                    Some("env-admin".into()),
+                );
+                return Ok(compira_mcp::mcp::activity::CURRENT_MCP_CALLER
+                    .scope(caller, next.run(request))
+                    .await);
             }
         }
     }
@@ -174,9 +242,52 @@ async fn mcp_auth_middleware(
     Err(StatusCode::UNAUTHORIZED)
 }
 
-async fn index() -> Html<&'static str> {
+async fn index_stub() -> Html<&'static str> {
     Html(
-        r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>CompiraMCP</title></head>
-<body><h1>CompiraMCP</h1><p>Admin UI will be available after frontend build. API: /api, MCP: /mcp</p></body></html>"#,
+        r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>CompiraMCP</title>
+<style>body{font-family:system-ui;max-width:560px;margin:48px auto;padding:0 16px;line-height:1.5;color:#1a1a1a}
+code{background:#f2f2f2;padding:2px 6px;border-radius:4px}</style></head>
+<body>
+<h1>CompiraMCP</h1>
+<p>管理后台静态文件尚未加载。</p>
+<ul>
+<li>开发：运行 <code>dev.bat</code>，浏览器打开 <code>http://127.0.0.1:5173</code></li>
+<li>生产：在 <code>frontend/</code> 执行 <code>npm run build</code> 后重启后端，直接访问本机端口根路径</li>
+<li>或设置环境变量 <code>COMPIRA_STATIC_DIR</code> 指向含 <code>index.html</code> 的目录</li>
+</ul>
+<p>API：<code>/api</code> · MCP：<code>/mcp</code></p>
+</body></html>"#,
     )
+}
+
+/// Locate built admin UI (`index.html`). Tries env, cwd-relative paths, and next to the binary.
+fn resolve_static_dir() -> Option<std::path::PathBuf> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+
+    if let Ok(raw) = std::env::var("COMPIRA_STATIC_DIR") {
+        candidates.push(PathBuf::from(raw));
+    }
+
+    candidates.push(PathBuf::from("../frontend/dist"));
+    candidates.push(PathBuf::from("frontend/dist"));
+    candidates.push(PathBuf::from("static"));
+    candidates.push(PathBuf::from("./static"));
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join("static"));
+            candidates.push(parent.join("frontend").join("dist"));
+            // cargo run: target/debug/compira-mcp → ../../../frontend/dist
+            candidates.push(parent.join("..").join("..").join("..").join("frontend").join("dist"));
+        }
+    }
+
+    for cand in candidates {
+        let index = cand.join("index.html");
+        if index.is_file() {
+            // Prefer absolute path for logging / ServeDir stability on Windows.
+            return Some(cand.canonicalize().unwrap_or(cand));
+        }
+    }
+    None
 }

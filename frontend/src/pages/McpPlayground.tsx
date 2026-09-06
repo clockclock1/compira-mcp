@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, McpTool } from "../api/client";
 
 const PRESETS: Record<string, object> = {
@@ -68,9 +69,14 @@ export default function McpPlayground() {
           <h1>MCP 调试</h1>
           <div className="page-sub">在线调用后端 MCP 工具，验证组件库数据服务</div>
         </div>
-        <div className="chip-status chip-green">
-          <span className="dot" />
-          已连接 · Bearer Token
+        <div className="header-actions">
+          <Link to="/mcp/live" className="btn btn-ghost">
+            实时监控
+          </Link>
+          <div className="chip-status chip-green">
+            <span className="dot" />
+            已连接 · Bearer Token
+          </div>
         </div>
       </div>
 

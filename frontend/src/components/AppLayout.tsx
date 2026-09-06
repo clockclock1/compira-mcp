@@ -38,12 +38,22 @@ const navItems: { to: string; label: string; adminOnly?: boolean; icon: ReactNod
   },
   {
     to: "/mcp",
+    end: true,
     label: "MCP 调试",
     icon: (
       <svg viewBox="0 0 24 24">
         <rect x="2" y="4" width="20" height="16" rx="2" />
         <path d="M7 15h10" />
         <path d="M7 9h10" />
+      </svg>
+    ),
+  },
+  {
+    to: "/mcp/live",
+    label: "MCP 监控",
+    icon: (
+      <svg viewBox="0 0 24 24">
+        <path d="M3 12h4l2-6 4 12 2-6h6" />
       </svg>
     ),
   },

@@ -840,23 +840,28 @@ impl Database {
     }
 
     pub fn verify_api_key(&self, key: &str) -> anyhow::Result<bool> {
+        Ok(self.resolve_api_key(key)?.is_some())
+    }
+
+    /// Verify key and return (id, name) when valid.
+    pub fn resolve_api_key(&self, key: &str) -> anyhow::Result<Option<(String, String)>> {
         let hash = hash_key(key);
         let conn = self.conn.lock().unwrap();
-        let found: Option<String> = conn
+        let found: Option<(String, String)> = conn
             .query_row(
-                "SELECT id FROM api_keys WHERE key_hash = ?1",
+                "SELECT id, name FROM api_keys WHERE key_hash = ?1",
                 [hash],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        if let Some(id) = found {
+        if let Some((id, name)) = found {
             conn.execute(
                 "UPDATE api_keys SET last_used_at = ?1 WHERE id = ?2",
                 params![Utc::now().to_rfc3339(), id],
             )?;
-            return Ok(true);
+            return Ok(Some((id, name)));
         }
-        Ok(false)
+        Ok(None)
     }
 
     pub fn create_sync_task(&self, library_id: &str) -> anyhow::Result<SyncTask> {
@@ -1516,6 +1521,253 @@ impl Database {
 
     fn parse_setting_u64(raw: Option<String>, default: u64) -> u64 {
         raw.and_then(|s| s.trim().parse().ok()).unwrap_or(default)
+    }
+
+    pub fn storage_table_stats(&self) -> anyhow::Result<crate::db::StorageTableStats> {
+        let conn = self.conn.lock().unwrap();
+        let components_rows: u64 = conn
+            .query_row("SELECT COUNT(*) FROM components", [], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as u64;
+        let libraries_rows: u64 = conn
+            .query_row("SELECT COUNT(*) FROM libraries", [], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as u64;
+        let sync_tasks_rows: u64 = conn
+            .query_row("SELECT COUNT(*) FROM sync_tasks", [], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as u64;
+        let app_logs_rows: u64 = conn
+            .query_row("SELECT COUNT(*) FROM app_logs", [], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as u64;
+        let sessions_rows: u64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as u64;
+        let components_source_bytes: u64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(LENGTH(source_content)), 0) FROM components",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0) as u64;
+        Ok(crate::db::StorageTableStats {
+            components_rows,
+            libraries_rows,
+            sync_tasks_rows,
+            app_logs_rows,
+            sessions_rows,
+            components_source_bytes,
+        })
+    }
+
+    pub fn sqlite_page_bytes(&self) -> anyhow::Result<u64> {
+        let conn = self.conn.lock().unwrap();
+        let page_count: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+        let page_size: i64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0))?;
+        Ok((page_count as u64).saturating_mul(page_size as u64))
+    }
+
+    pub fn prune_sync_tasks(&self, older_than_days: u64, dry_run: bool) -> anyhow::Result<usize> {
+        let cutoff = (Utc::now() - chrono::Duration::days(older_than_days as i64)).to_rfc3339();
+        let conn = self.conn.lock().unwrap();
+        if dry_run {
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sync_tasks
+                 WHERE status IN ('completed','failed','success','error','cancelled')
+                   AND COALESCE(finished_at, started_at) < ?1",
+                [&cutoff],
+                |r| r.get(0),
+            )?;
+            return Ok(n as usize);
+        }
+        let n = conn.execute(
+            "DELETE FROM sync_tasks
+             WHERE status IN ('completed','failed','success','error','cancelled')
+               AND COALESCE(finished_at, started_at) < ?1",
+            [&cutoff],
+        )?;
+        Ok(n)
+    }
+
+    pub fn prune_app_logs(&self, older_than_days: u64, dry_run: bool) -> anyhow::Result<usize> {
+        let cutoff = (Utc::now() - chrono::Duration::days(older_than_days as i64)).to_rfc3339();
+        let conn = self.conn.lock().unwrap();
+        if dry_run {
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM app_logs WHERE created_at < ?1",
+                [&cutoff],
+                |r| r.get(0),
+            )?;
+            return Ok(n as usize);
+        }
+        let n = conn.execute("DELETE FROM app_logs WHERE created_at < ?1", [&cutoff])?;
+        Ok(n)
+    }
+
+    pub fn prune_expired_sessions_count(&self, dry_run: bool) -> anyhow::Result<usize> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn.lock().unwrap();
+        if dry_run {
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sessions WHERE expires_at <= ?1",
+                [&now],
+                |r| r.get(0),
+            )?;
+            return Ok(n as usize);
+        }
+        let n = conn.execute("DELETE FROM sessions WHERE expires_at <= ?1", [&now])?;
+        Ok(n)
+    }
+
+    pub fn wal_checkpoint_truncate(&self) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
+    }
+
+    pub fn vacuum(&self) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch("VACUUM;")?;
+        Ok(())
+    }
+
+    pub fn get_cleanup_schedule(&self) -> anyhow::Result<CleanupSchedule> {
+        let defaults = crate::storage::default_cleanup_schedule();
+        let enabled = match self.get_setting("cleanup_enabled")? {
+            Some(v) => matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            ),
+            None => defaults.enabled,
+        };
+        Ok(CleanupSchedule {
+            enabled,
+            interval_hours: Self::parse_setting_u64(
+                self.get_setting("cleanup_interval_hours")?,
+                defaults.interval_hours,
+            )
+            .clamp(1, 24 * 30),
+            orphan_repos: Self::parse_setting_bool(
+                self.get_setting("cleanup_orphan_repos")?,
+                defaults.orphan_repos,
+            ),
+            sync_tasks_older_than_days: Self::parse_setting_u64(
+                self.get_setting("cleanup_sync_tasks_days")?,
+                defaults.sync_tasks_older_than_days,
+            )
+            .min(3650),
+            app_logs_older_than_days: Self::parse_setting_u64(
+                self.get_setting("cleanup_app_logs_days")?,
+                defaults.app_logs_older_than_days,
+            )
+            .min(3650),
+            expired_sessions: Self::parse_setting_bool(
+                self.get_setting("cleanup_expired_sessions")?,
+                defaults.expired_sessions,
+            ),
+            wal_checkpoint: Self::parse_setting_bool(
+                self.get_setting("cleanup_wal_checkpoint")?,
+                defaults.wal_checkpoint,
+            ),
+            vacuum: Self::parse_setting_bool(self.get_setting("cleanup_vacuum")?, defaults.vacuum),
+            last_run_at: self.get_setting("cleanup_last_run_at")?,
+            last_result: self.get_setting("cleanup_last_result")?,
+        })
+    }
+
+    pub fn update_cleanup_schedule(
+        &self,
+        patch: &CleanupSchedule,
+    ) -> anyhow::Result<CleanupSchedule> {
+        self.set_setting(
+            "cleanup_enabled",
+            if patch.enabled { "true" } else { "false" },
+        )?;
+        self.set_setting(
+            "cleanup_interval_hours",
+            &patch.interval_hours.clamp(1, 24 * 30).to_string(),
+        )?;
+        self.set_setting(
+            "cleanup_orphan_repos",
+            if patch.orphan_repos { "true" } else { "false" },
+        )?;
+        self.set_setting(
+            "cleanup_sync_tasks_days",
+            &patch.sync_tasks_older_than_days.min(3650).to_string(),
+        )?;
+        self.set_setting(
+            "cleanup_app_logs_days",
+            &patch.app_logs_older_than_days.min(3650).to_string(),
+        )?;
+        self.set_setting(
+            "cleanup_expired_sessions",
+            if patch.expired_sessions {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "cleanup_wal_checkpoint",
+            if patch.wal_checkpoint {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        self.set_setting(
+            "cleanup_vacuum",
+            if patch.vacuum { "true" } else { "false" },
+        )?;
+        self.get_cleanup_schedule()
+    }
+
+    pub fn record_cleanup_run(&self, at: &str, summary: &str) -> anyhow::Result<()> {
+        self.set_setting("cleanup_last_run_at", at)?;
+        self.set_setting("cleanup_last_result", summary)?;
+        Ok(())
+    }
+
+    pub fn bootstrap_cleanup_settings(&self) -> anyhow::Result<()> {
+        let d = crate::storage::default_cleanup_schedule();
+        if self.get_setting("cleanup_enabled")?.is_none() {
+            self.set_setting("cleanup_enabled", "false")?;
+        }
+        if self.get_setting("cleanup_interval_hours")?.is_none() {
+            self.set_setting("cleanup_interval_hours", &d.interval_hours.to_string())?;
+        }
+        if self.get_setting("cleanup_orphan_repos")?.is_none() {
+            self.set_setting("cleanup_orphan_repos", "true")?;
+        }
+        if self.get_setting("cleanup_sync_tasks_days")?.is_none() {
+            self.set_setting(
+                "cleanup_sync_tasks_days",
+                &d.sync_tasks_older_than_days.to_string(),
+            )?;
+        }
+        if self.get_setting("cleanup_app_logs_days")?.is_none() {
+            self.set_setting(
+                "cleanup_app_logs_days",
+                &d.app_logs_older_than_days.to_string(),
+            )?;
+        }
+        if self.get_setting("cleanup_expired_sessions")?.is_none() {
+            self.set_setting("cleanup_expired_sessions", "true")?;
+        }
+        if self.get_setting("cleanup_wal_checkpoint")?.is_none() {
+            self.set_setting("cleanup_wal_checkpoint", "true")?;
+        }
+        if self.get_setting("cleanup_vacuum")?.is_none() {
+            self.set_setting("cleanup_vacuum", "false")?;
+        }
+        Ok(())
+    }
+
+    fn parse_setting_bool(raw: Option<String>, default: bool) -> bool {
+        match raw {
+            Some(v) => matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            ),
+            None => default,
+        }
     }
 }
 

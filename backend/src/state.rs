@@ -5,6 +5,7 @@ use axum::http::request::Parts;
 
 use crate::config::Config;
 use crate::db::{Database, User};
+use crate::mcp::activity::McpActivity;
 use crate::tasks::TaskManager;
 
 #[derive(Clone)]
@@ -12,6 +13,7 @@ pub struct AppState {
     pub db: Database,
     pub tasks: Arc<TaskManager>,
     pub config: Arc<Config>,
+    pub mcp_activity: Arc<McpActivity>,
 }
 
 impl AppState {
@@ -20,11 +22,16 @@ impl AppState {
             db,
             tasks: Arc::new(tasks),
             config: Arc::new(config),
+            mcp_activity: Arc::new(McpActivity::new()),
         }
     }
 
     pub async fn verify_key(&self, key: &str) -> bool {
         self.db.verify_api_key(key).unwrap_or(false)
+    }
+
+    pub async fn resolve_key(&self, key: &str) -> Option<(String, String)> {
+        self.db.resolve_api_key(key).ok().flatten()
     }
 
     pub async fn verify_session(&self, token: &str) -> Option<User> {

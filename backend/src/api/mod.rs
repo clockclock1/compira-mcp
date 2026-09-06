@@ -43,6 +43,13 @@ pub fn routes(state: AppState) -> Router {
         .route("/settings/llm", get(get_llm_settings).put(update_llm_settings))
         .route("/settings/sync", get(get_sync_settings).put(update_sync_settings))
         .route("/settings/auth", get(get_auth_settings).put(update_auth_settings))
+        .route("/admin/storage/stats", get(storage_stats))
+        .route("/admin/storage/cleanup", post(storage_cleanup))
+        .route(
+            "/admin/storage/schedule",
+            get(get_cleanup_schedule).put(update_cleanup_schedule),
+        )
+        .route("/admin/memory", get(memory_report))
         .route("/components/{id}", get(get_component))
         .route("/components/{id}/source", get(get_component_source))
         .route("/components/{id}/docs", get(get_component_docs))
@@ -50,6 +57,7 @@ pub fn routes(state: AppState) -> Router {
         .route("/search/components", get(search_components))
         .route("/mcp/tools", get(list_mcp_tools))
         .route("/mcp/call", post(call_mcp_tool))
+        .route("/mcp/activity", get(list_mcp_activity).delete(clear_mcp_activity))
         .route("/tasks", get(list_tasks))
         .route("/tasks/{id}", get(get_task))
         .route("/api-keys", get(list_api_keys).post(create_api_key))
@@ -357,6 +365,131 @@ async fn update_auth_settings(
         }
         Err(e) => err_response(e),
     }
+}
+
+async fn storage_stats(auth: AuthUser, State(state): State<AppState>) -> impl IntoResponse {
+    if !auth.is_admin() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match tokio::task::spawn_blocking({
+        let db = state.db.clone();
+        let config = state.config.clone();
+        move || crate::storage::collect_storage_stats(&db, config.as_ref())
+    })
+    .await
+    {
+        Ok(Ok(s)) => Json(s).into_response(),
+        Ok(Err(e)) => err_response(e),
+        Err(e) => err_response(anyhow::anyhow!("storage stats join: {e}")),
+    }
+}
+
+#[derive(Deserialize)]
+struct CleanupReq {
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default = "default_true")]
+    pub orphan_repos: bool,
+    pub sync_tasks_older_than_days: Option<u64>,
+    pub app_logs_older_than_days: Option<u64>,
+    #[serde(default = "default_true")]
+    pub expired_sessions: bool,
+    #[serde(default = "default_true")]
+    pub wal_checkpoint: bool,
+    #[serde(default)]
+    pub vacuum: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+async fn storage_cleanup(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Json(req): Json<CleanupReq>,
+) -> impl IntoResponse {
+    if !auth.is_admin() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let opts = crate::storage::CleanupOptions {
+        dry_run: req.dry_run,
+        orphan_repos: req.orphan_repos,
+        sync_tasks_older_than_days: req.sync_tasks_older_than_days.or(Some(30)),
+        app_logs_older_than_days: req.app_logs_older_than_days.or(Some(14)),
+        expired_sessions: req.expired_sessions,
+        wal_checkpoint: req.wal_checkpoint,
+        vacuum: req.vacuum,
+    };
+    match tokio::task::spawn_blocking({
+        let db = state.db.clone();
+        let config = state.config.clone();
+        move || crate::storage::run_cleanup(&db, config.as_ref(), opts)
+    })
+    .await
+    {
+        Ok(Ok(r)) => {
+            if !r.dry_run {
+                let _ = state.db.record_cleanup_run(
+                    &crate::storage::now_rfc3339(),
+                    &crate::storage::format_cleanup_summary(&r),
+                );
+                let _ = state.db.log(
+                    "info",
+                    &format!("Manual cleanup: {}", crate::storage::format_cleanup_summary(&r)),
+                    None,
+                );
+            }
+            Json(r).into_response()
+        }
+        Ok(Err(e)) => err_response(e),
+        Err(e) => err_response(anyhow::anyhow!("cleanup join: {e}")),
+    }
+}
+
+async fn get_cleanup_schedule(auth: AuthUser, State(state): State<AppState>) -> impl IntoResponse {
+    if !auth.is_admin() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match state.db.get_cleanup_schedule() {
+        Ok(s) => Json(s).into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn update_cleanup_schedule(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Json(req): Json<crate::db::CleanupSchedule>,
+) -> impl IntoResponse {
+    if !auth.is_admin() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match state.db.update_cleanup_schedule(&req) {
+        Ok(s) => {
+            let _ = state.db.log(
+                "info",
+                &format!(
+                    "Cleanup schedule updated: enabled={}, every {}h",
+                    s.enabled, s.interval_hours
+                ),
+                None,
+            );
+            Json(s).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+async fn memory_report(auth: AuthUser, State(state): State<AppState>) -> impl IntoResponse {
+    if !auth.is_admin() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    Json(crate::storage::collect_memory_report(
+        &state.db,
+        state.tasks.as_ref(),
+    ))
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -688,17 +821,65 @@ struct McpCallReq {
 }
 
 async fn call_mcp_tool(
+    auth: AuthUser,
     State(state): State<AppState>,
     Json(req): Json<McpCallReq>,
 ) -> impl IntoResponse {
+    use std::time::Instant;
+    use crate::mcp::activity::McpCaller;
+
+    let caller = McpCaller::playground(
+        auth.user.as_ref().map(|u| u.id.clone()),
+        auth.user.as_ref().map(|u| u.username.clone()),
+    );
+    let call_id = state
+        .mcp_activity
+        .begin(&req.tool, &req.arguments, &caller);
+    let started = Instant::now();
+
     match crate::tools_exec::execute_tool(&state.db, &req.tool, req.arguments).await {
-        Ok(result) => Json(serde_json::json!({ "ok": true, "result": result })).into_response(),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
-        )
-            .into_response(),
+        Ok(result) => {
+            state.mcp_activity.finish(&call_id, true, None, started);
+            Json(serde_json::json!({ "ok": true, "result": result })).into_response()
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            state
+                .mcp_activity
+                .finish(&call_id, false, Some(msg.clone()), started);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "ok": false, "error": msg })),
+            )
+                .into_response()
+        }
     }
+}
+
+#[derive(Deserialize)]
+struct ActivityQuery {
+    #[serde(default = "default_activity_limit")]
+    limit: usize,
+}
+
+fn default_activity_limit() -> usize {
+    100
+}
+
+async fn list_mcp_activity(
+    _auth: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<ActivityQuery>,
+) -> impl IntoResponse {
+    Json(state.mcp_activity.list(q.limit)).into_response()
+}
+
+async fn clear_mcp_activity(auth: AuthUser, State(state): State<AppState>) -> impl IntoResponse {
+    if !auth.is_admin() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    state.mcp_activity.clear();
+    StatusCode::NO_CONTENT.into_response()
 }
 
 #[derive(Deserialize)]

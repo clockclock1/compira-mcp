@@ -181,3 +181,31 @@ pub struct AuthSettings {
     /// When true, activity extends the session expiry.
     pub sliding: bool,
 }
+
+/// Scheduled maintenance / cleanup policy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupSchedule {
+    pub enabled: bool,
+    /// Run every N hours when enabled.
+    pub interval_hours: u64,
+    pub orphan_repos: bool,
+    pub sync_tasks_older_than_days: u64,
+    pub app_logs_older_than_days: u64,
+    pub expired_sessions: bool,
+    pub wal_checkpoint: bool,
+    /// VACUUM is heavy; off by default even in schedule.
+    pub vacuum: bool,
+    pub last_run_at: Option<String>,
+    pub last_result: Option<String>,
+}
+
+/// Aggregate table sizes for storage UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageTableStats {
+    pub components_rows: u64,
+    pub libraries_rows: u64,
+    pub sync_tasks_rows: u64,
+    pub app_logs_rows: u64,
+    pub sessions_rows: u64,
+    pub components_source_bytes: u64,
+}

@@ -8,6 +8,7 @@ pub mod mcp;
 mod parser;
 mod git;
 mod indexer;
+pub mod storage;
 pub mod tasks;
 mod state;
 mod tools_exec;

@@ -1,23 +1,31 @@
+use std::sync::Arc;
+use std::time::Instant;
+
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
     schemars, tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::db::Database;
+use crate::tools_exec::execute_tool;
 
+pub mod activity;
 pub mod validate;
+pub use activity::{McpActivity, McpCaller, McpCallEvent};
 pub use validate::validate_code_internal;
 
 #[derive(Clone)]
 pub struct CompiraMcpServer {
     db: Database,
+    activity: Arc<McpActivity>,
     #[allow(dead_code)] // required by rmcp #[tool_router] macro
     tool_router: ToolRouter<Self>,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SearchComponentsArgs {
     pub query: String,
     #[serde(default)]
@@ -26,12 +34,12 @@ pub struct SearchComponentsArgs {
     pub limit: i64,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ComponentIdArgs {
     pub component_id: String,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SearchSourceArgs {
     pub query: String,
     #[serde(default)]
@@ -40,11 +48,16 @@ pub struct SearchSourceArgs {
     pub limit: i64,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ValidateCodeArgs {
     pub code: String,
     #[serde(default)]
     pub library_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct LibraryIdArgs {
+    pub library_id: String,
 }
 
 fn default_limit() -> i64 {
@@ -53,9 +66,10 @@ fn default_limit() -> i64 {
 
 #[tool_router]
 impl CompiraMcpServer {
-    pub fn new(db: Database) -> Self {
+    pub fn new(db: Database, activity: Arc<McpActivity>) -> Self {
         Self {
             db,
+            activity,
             tool_router: Self::tool_router(),
         }
     }
@@ -66,16 +80,41 @@ impl CompiraMcpServer {
         )]))
     }
 
+    async fn run_tool(&self, tool: &str, args: Value) -> Result<CallToolResult, McpError> {
+        let caller = activity::current_caller_or(McpCaller::mcp(None, None));
+        let id = self.activity.begin(tool, &args, &caller);
+        let started = Instant::now();
+        match execute_tool(&self.db, tool, args).await {
+            Ok(value) => {
+                self.activity.finish(&id, true, None, started);
+                // Source tool: prefer raw text for agents when present.
+                if tool == "get_component_source" {
+                    if let Some(source) = value.get("source").and_then(|s| s.as_str()) {
+                        return Ok(CallToolResult::success(vec![ContentBlock::text(
+                            source.to_string(),
+                        )]));
+                    }
+                }
+                Self::json_result(value)
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                self.activity.finish(&id, false, Some(msg.clone()), started);
+                Err(McpError::internal_error(msg, None))
+            }
+        }
+    }
+
     #[tool(description = "Search indexed frontend components by name, props, events, tags or description")]
     async fn search_components(
         &self,
         Parameters(args): Parameters<SearchComponentsArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let results = self
-            .db
-            .search_components(&args.query, args.library_id.as_deref(), args.limit)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Self::json_result(results)
+        self.run_tool(
+            "search_components",
+            serde_json::to_value(&args).unwrap_or_default(),
+        )
+        .await
     }
 
     #[tool(description = "Get component metadata including props, events and slots")]
@@ -83,12 +122,11 @@ impl CompiraMcpServer {
         &self,
         Parameters(args): Parameters<ComponentIdArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let component = self
-            .db
-            .get_component(&args.component_id)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::invalid_params("Component not found", None))?;
-        Self::json_result(component)
+        self.run_tool(
+            "get_component",
+            serde_json::to_value(&args).unwrap_or_default(),
+        )
+        .await
     }
 
     #[tool(description = "Get full source code of a component")]
@@ -96,12 +134,11 @@ impl CompiraMcpServer {
         &self,
         Parameters(args): Parameters<ComponentIdArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let source = self
-            .db
-            .get_component_source(&args.component_id)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::invalid_params("Component not found", None))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(source)]))
+        self.run_tool(
+            "get_component_source",
+            serde_json::to_value(&args).unwrap_or_default(),
+        )
+        .await
     }
 
     #[tool(description = "Get usage examples for a component")]
@@ -109,11 +146,11 @@ impl CompiraMcpServer {
         &self,
         Parameters(args): Parameters<ComponentIdArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let examples = self
-            .db
-            .get_component_examples(&args.component_id)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Self::json_result(examples)
+        self.run_tool(
+            "get_component_example",
+            serde_json::to_value(&args).unwrap_or_default(),
+        )
+        .await
     }
 
     #[tool(description = "Get documentation for a component")]
@@ -121,71 +158,53 @@ impl CompiraMcpServer {
         &self,
         Parameters(args): Parameters<ComponentIdArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let docs = self
-            .db
-            .get_component_docs(&args.component_id)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .unwrap_or_default();
-        Ok(CallToolResult::success(vec![ContentBlock::text(docs)]))
+        self.run_tool(
+            "get_component_docs",
+            serde_json::to_value(&args).unwrap_or_default(),
+        )
+        .await
     }
 
-    #[tool(description = "Search component source code for patterns or keywords")]
+    #[tool(description = "Search inside component source code")]
     async fn search_source(
         &self,
         Parameters(args): Parameters<SearchSourceArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let results = self
-            .db
-            .search_source(&args.query, args.library_id.as_deref(), args.limit)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Self::json_result(results)
+        self.run_tool(
+            "search_source",
+            serde_json::to_value(&args).unwrap_or_default(),
+        )
+        .await
     }
 
-    #[tool(description = "List all registered component libraries")]
+    #[tool(description = "List all indexed component libraries")]
     async fn list_libraries(&self) -> Result<CallToolResult, McpError> {
-        let libraries = self
-            .db
-            .list_libraries()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Self::json_result(libraries)
+        self.run_tool("list_libraries", serde_json::json!({})).await
     }
 
-    #[tool(description = "Get usage rules and constraints for a component library")]
+    #[tool(description = "Get coding rules / conventions for a library")]
     async fn get_library_rules(
         &self,
         Parameters(args): Parameters<LibraryIdArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let library = self
-            .db
-            .get_library(&args.library_id)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::invalid_params("Library not found", None))?;
-        Self::json_result(serde_json::json!({
-            "library_id": library.id,
-            "name": library.name,
-            "rules": library.rules.unwrap_or_else(|| "No specific rules defined.".into()),
-            "component_count": library.component_count,
-            "status": library.status,
-        }))
+        self.run_tool(
+            "get_library_rules",
+            serde_json::to_value(&args).unwrap_or_default(),
+        )
+        .await
     }
 
-    #[tool(description = "Validate generated code against component library rules and available components")]
+    #[tool(description = "Validate frontend code against indexed component APIs")]
     async fn validate_code(
         &self,
         Parameters(args): Parameters<ValidateCodeArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let violations = validate_code_internal(&self.db, &args.code, args.library_id.as_deref())
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Self::json_result(serde_json::json!({
-            "valid": violations.is_empty(),
-            "violations": violations,
-        }))
+        self.run_tool(
+            "validate_code",
+            serde_json::to_value(&args).unwrap_or_default(),
+        )
+        .await
     }
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct LibraryIdArgs {
-    pub library_id: String,
 }
 
 #[tool_handler]
@@ -204,19 +223,21 @@ impl ServerHandler for CompiraMcpServer {
 
 pub fn create_mcp_service(
     db: Database,
+    activity: Arc<McpActivity>,
 ) -> rmcp::transport::streamable_http_server::StreamableHttpService<
     CompiraMcpServer,
     rmcp::transport::streamable_http_server::session::local::LocalSessionManager,
 > {
     use rmcp::transport::streamable_http_server::{
-        session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
+        session::local::LocalSessionManager, StreamableHttpService,
     };
     let db_clone = db.clone();
+    let activity_clone = activity.clone();
     // rmcp defaults allowed_hosts to localhost only — remote IP/domain access gets HTTP 403,
     // which Cursor surfaces as "Needs authentication". API Key middleware already protects /mcp.
     let config = mcp_http_config();
     StreamableHttpService::new(
-        move || Ok(CompiraMcpServer::new(db_clone.clone())),
+        move || Ok(CompiraMcpServer::new(db_clone.clone(), activity_clone.clone())),
         LocalSessionManager::default().into(),
         config,
     )
@@ -252,4 +273,3 @@ fn mcp_http_config() -> rmcp::transport::streamable_http_server::StreamableHttpS
     }
     config
 }
-

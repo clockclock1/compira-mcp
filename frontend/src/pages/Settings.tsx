@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import MaintenancePanel from "../components/MaintenancePanel";
 
 interface LlmSettings {
   enabled: boolean;
@@ -223,7 +224,7 @@ export default function Settings() {
       <div className="page-header">
         <div>
           <h1>系统设置</h1>
-          <div className="page-sub">账号密码 · 登录时效 · 同步并发 · LLM</div>
+          <div className="page-sub">账号密码 · 登录时效 · 存储维护 · 同步并发 · LLM</div>
         </div>
         <div className="settings-header-meta">
           {user && <span className="chip-file">{user.username}</span>}
@@ -249,6 +250,21 @@ export default function Settings() {
 
       {error && <p className="error">{error}</p>}
       {ok && <p className="settings-ok">{ok}</p>}
+
+      {isAdmin && (
+        <div style={{ marginBottom: 18 }}>
+          <MaintenancePanel
+            onError={(msg) => {
+              setOk("");
+              setError(msg);
+            }}
+            onOk={(msg) => {
+              setError("");
+              setOk(msg);
+            }}
+          />
+        </div>
+      )}
 
       <div className="settings-grid">
         {/* Account — all users */}

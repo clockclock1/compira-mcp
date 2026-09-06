@@ -298,6 +298,123 @@ export const api = {
         sliding: boolean;
       }>("/settings/auth", { method: "PUT", body: JSON.stringify(data) }),
   },
+  admin: {
+    storageStats: () =>
+      request<{
+        data_dir: string;
+        repos_dir: string;
+        total_bytes: number;
+        database: {
+          path: string;
+          file_bytes: number;
+          wal_bytes: number;
+          shm_bytes: number;
+          page_bytes: number;
+          components_source_bytes: number;
+          components_rows: number;
+          libraries_rows: number;
+          sync_tasks_rows: number;
+          app_logs_rows: number;
+          sessions_rows: number;
+        };
+        repos: {
+          total_bytes: number;
+          library_dirs: number;
+          orphan_dirs: number;
+          entries: {
+            id: string;
+            name: string | null;
+            bytes: number;
+            source_type: string | null;
+            orphan: boolean;
+          }[];
+        };
+        reclaimable_bytes_estimate: number;
+      }>("/admin/storage/stats"),
+    cleanup: (data?: {
+      dry_run?: boolean;
+      orphan_repos?: boolean;
+      sync_tasks_older_than_days?: number;
+      app_logs_older_than_days?: number;
+      expired_sessions?: boolean;
+      wal_checkpoint?: boolean;
+      vacuum?: boolean;
+    }) =>
+      request<{
+        dry_run: boolean;
+        orphan_repos_removed: number;
+        orphan_repos_bytes: number;
+        sync_tasks_deleted: number;
+        app_logs_deleted: number;
+        sessions_deleted: number;
+        wal_checkpoint: boolean;
+        vacuum: boolean;
+        bytes_freed_estimate: number;
+        messages: string[];
+        errors: string[];
+      }>("/admin/storage/cleanup", {
+        method: "POST",
+        body: JSON.stringify(data || {}),
+      }),
+    cleanupSchedule: () =>
+      request<{
+        enabled: boolean;
+        interval_hours: number;
+        orphan_repos: boolean;
+        sync_tasks_older_than_days: number;
+        app_logs_older_than_days: number;
+        expired_sessions: boolean;
+        wal_checkpoint: boolean;
+        vacuum: boolean;
+        last_run_at: string | null;
+        last_result: string | null;
+      }>("/admin/storage/schedule"),
+    updateCleanupSchedule: (data: {
+      enabled: boolean;
+      interval_hours: number;
+      orphan_repos: boolean;
+      sync_tasks_older_than_days: number;
+      app_logs_older_than_days: number;
+      expired_sessions: boolean;
+      wal_checkpoint: boolean;
+      vacuum: boolean;
+      last_run_at?: string | null;
+      last_result?: string | null;
+    }) =>
+      request<{
+        enabled: boolean;
+        interval_hours: number;
+        orphan_repos: boolean;
+        sync_tasks_older_than_days: number;
+        app_logs_older_than_days: number;
+        expired_sessions: boolean;
+        wal_checkpoint: boolean;
+        vacuum: boolean;
+        last_run_at: string | null;
+        last_result: string | null;
+      }>("/admin/storage/schedule", { method: "PUT", body: JSON.stringify(data) }),
+    memory: () =>
+      request<{
+        process: {
+          pid: number;
+          working_set_bytes: number;
+          virtual_bytes: number;
+        };
+        task_manager: { max_jobs: number; active_jobs: number };
+        sqlite: {
+          cache_size_kib: number;
+          mmap_size: number;
+          temp_store: string;
+        };
+        breakdown: {
+          key: string;
+          label: string;
+          bytes: number | null;
+          detail: string;
+        }[];
+        notes: string[];
+      }>("/admin/memory"),
+  },
   tasks: {
     list: (libraryId?: string) =>
       request<SyncTask[]>(`/tasks${libraryId ? `?library_id=${libraryId}` : ""}`),
@@ -334,5 +451,25 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ tool, arguments: arguments_ }),
       }),
+    activity: (limit = 100) =>
+      request<
+        {
+          id: string;
+          started_at: string;
+          finished_at: string | null;
+          tool: string;
+          args_summary: string;
+          duration_ms: number | null;
+          ok: boolean | null;
+          error: string | null;
+          source: string;
+          api_key_id: string | null;
+          api_key_name: string | null;
+          user_id: string | null;
+          username: string | null;
+          status: string;
+        }[]
+      >(`/mcp/activity?limit=${limit}`),
+    clearActivity: () => request<void>("/mcp/activity", { method: "DELETE" }),
   },
 };
