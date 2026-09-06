@@ -209,13 +209,47 @@ pub fn create_mcp_service(
     rmcp::transport::streamable_http_server::session::local::LocalSessionManager,
 > {
     use rmcp::transport::streamable_http_server::{
-        session::local::LocalSessionManager, StreamableHttpService,
+        session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
     };
     let db_clone = db.clone();
+    // rmcp defaults allowed_hosts to localhost only — remote IP/domain access gets HTTP 403,
+    // which Cursor surfaces as "Needs authentication". API Key middleware already protects /mcp.
+    let config = mcp_http_config();
     StreamableHttpService::new(
         move || Ok(CompiraMcpServer::new(db_clone.clone())),
         LocalSessionManager::default().into(),
-        Default::default(),
+        config,
     )
+}
+
+/// Build streamable HTTP config. `COMPIRA_MCP_ALLOWED_HOSTS=host1,host2:8088` or `*` / unset = any Host.
+fn mcp_http_config() -> rmcp::transport::streamable_http_server::StreamableHttpServerConfig {
+    use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
+
+    let mut config = StreamableHttpServerConfig::default();
+    match std::env::var("COMPIRA_MCP_ALLOWED_HOSTS") {
+        Ok(raw) => {
+            let raw = raw.trim();
+            if raw.is_empty() || raw == "*" {
+                tracing::info!("MCP Host check disabled (COMPIRA_MCP_ALLOWED_HOSTS={raw:?})");
+                config = config.disable_allowed_hosts();
+            } else {
+                let hosts: Vec<String> = raw
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                tracing::info!("MCP allowed Hosts: {hosts:?}");
+                config = config.with_allowed_hosts(hosts);
+            }
+        }
+        Err(_) => {
+            tracing::info!(
+                "MCP Host check disabled by default (set COMPIRA_MCP_ALLOWED_HOSTS to restrict)"
+            );
+            config = config.disable_allowed_hosts();
+        }
+    }
+    config
 }
 

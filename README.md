@@ -200,6 +200,7 @@ location / {
 | `COMPIRA_MAX_JOBS` | `3` | 同时运行的组件库任务数（其余排队，避免拖死 API） |
 | `COMPIRA_INGEST_BATCH_SIZE` | `250` | 批量入库事务大小 |
 | `COMPIRA_DOWNLOAD_CONCURRENCY` | `8` | AI 拉取并行下载数 |
+| `COMPIRA_MCP_ALLOWED_HOSTS` | `*`（默认不限制） | MCP `Host` 白名单，逗号分隔；`*` 或不设=允许任意 Host |
 | `RUST_LOG` | `info,compira_mcp=debug` | 日志级别 |
 
 ---
@@ -219,7 +220,13 @@ location / {
 }
 ```
 
-API Key 在管理后台「API Keys」创建。也可用登录后的 `Authorization: Bearer <session>` 调用 `/api/mcp/*` 调试接口。
+API Key 在管理后台「API Keys」创建并随时复制。也可用登录后的 `Authorization: Bearer <session>` 调用 `/api/mcp/*` 调试接口。
+
+**说明：** Cursor 若显示 **Needs authentication**（需要认证，不是「认真」）并出现蓝色 Connect：
+
+1. Compira **不走浏览器 OAuth**，一般不必点 Connect。
+2. 确认 `headers` 里 `X-API-Key` 正确，且服务可访问。
+3. 用公网 IP/域名访问时，旧版默认只允许 `localhost` Host，会导致 `/mcp` 返回 403；升级后默认放行（仍靠 API Key 鉴权）。如需白名单：`COMPIRA_MCP_ALLOWED_HOSTS=your.domain:8088`。
 
 ---
 
