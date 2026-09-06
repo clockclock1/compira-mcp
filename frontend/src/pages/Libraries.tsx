@@ -253,7 +253,7 @@ export default function Libraries() {
         <div>
           <h1>组件库</h1>
           <div className="page-sub">
-            支持 Git 同步、上传组件文件（AI 解析）、纯 AI 自然语言拉取
+            可随时批量添加；同步并行与解析并发在「系统设置」配置
             {aiEnabled ? " · AI 已启用" : " · AI 未配置（管理员可在「系统设置」配置 LLM）"}
           </div>
         </div>
@@ -275,13 +275,13 @@ export default function Libraries() {
             className="btn btn-ghost"
             onClick={handleSyncAll}
             disabled={libraries.length === 0}
-            title="重新同步/索引全部组件库"
+            title="一键同步全部组件库（并行数见系统设置）"
           >
             <svg viewBox="0 0 24 24">
               <path d="M21 12a9 9 0 1 1-2.6-6.4" />
               <path d="M21 3v6h-6" />
             </svg>
-            全部同步
+            一键同步
           </button>
           <ShineButton onClick={() => setShowModal(true)}>
             <svg viewBox="0 0 24 24">

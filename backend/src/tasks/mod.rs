@@ -1,29 +1,81 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, Semaphore};
+use tokio::sync::{broadcast, Notify};
 
 use crate::config::Config;
 use crate::db::Database;
 use crate::indexer;
+
+/// Limits concurrent library jobs; max can be changed at runtime from settings.
+struct DynamicLimiter {
+    active: AtomicUsize,
+    max: AtomicUsize,
+    notify: Notify,
+}
+
+impl DynamicLimiter {
+    fn new(max: usize) -> Self {
+        Self {
+            active: AtomicUsize::new(0),
+            max: AtomicUsize::new(max.clamp(1, 64)),
+            notify: Notify::new(),
+        }
+    }
+
+    fn set_max(&self, max: usize) {
+        self.max.store(max.clamp(1, 64), Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+
+    fn max(&self) -> usize {
+        self.max.load(Ordering::Relaxed)
+    }
+
+    async fn acquire(&self) {
+        loop {
+            let max = self.max.load(Ordering::Acquire);
+            let cur = self.active.load(Ordering::Acquire);
+            if cur < max {
+                if self
+                    .active
+                    .compare_exchange(cur, cur + 1, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    return;
+                }
+                continue;
+            }
+            self.notify.notified().await;
+        }
+    }
+
+    fn release(&self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+        self.notify.notify_one();
+    }
+}
 
 #[derive(Clone)]
 pub struct TaskManager {
     db: Database,
     config: Arc<Config>,
     tx: broadcast::Sender<String>,
-    /// Limits how many library jobs run at once so the API stays responsive.
-    job_slots: Arc<Semaphore>,
+    limiter: Arc<DynamicLimiter>,
 }
 
 impl TaskManager {
     pub fn new(db: Database, config: Config) -> Self {
         let (tx, _) = broadcast::channel(256);
-        let max_jobs = config.max_jobs;
-        tracing::info!("Task manager: max concurrent library jobs = {max_jobs}");
+        let max_jobs = db
+            .get_sync_settings(&config)
+            .map(|s| s.max_jobs)
+            .unwrap_or(config.max_jobs);
+        tracing::info!("Task manager: max concurrent library jobs = {max_jobs} (adds unlimited)");
         Self {
             db,
-            job_slots: Arc::new(Semaphore::new(max_jobs)),
+            limiter: Arc::new(DynamicLimiter::new(max_jobs)),
             config: Arc::new(config),
             tx,
         }
@@ -33,29 +85,37 @@ impl TaskManager {
         self.tx.subscribe()
     }
 
+    /// Apply admin-configured sync concurrency (takes effect for newly waiting jobs).
+    pub fn apply_sync_settings(&self, max_jobs: usize) {
+        tracing::info!("Updating max concurrent library jobs -> {max_jobs}");
+        self.limiter.set_max(max_jobs);
+    }
+
+    pub fn max_jobs(&self) -> usize {
+        self.limiter.max()
+    }
+
     async fn run_job<F, Fut>(&self, task_id: String, library_id: String, work: F)
     where
         F: FnOnce() -> Fut + Send + 'static,
         Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
     {
-        let slots = self.job_slots.clone();
+        let limiter = self.limiter.clone();
         let db = self.db.clone();
         let tx = self.tx.clone();
         let _ = tx.send(task_id.clone());
 
-        let permit = match slots.acquire_owned().await {
-            Ok(p) => p,
-            Err(_) => {
-                let msg = "Job queue closed".to_string();
-                let _ = db.update_sync_task(&task_id, 0, &msg, Some("failed"));
-                let _ = db.set_library_error(&library_id, &msg);
-                return;
-            }
-        };
+        let _ = db.update_sync_task(
+            &task_id,
+            0,
+            &format!("Waiting for sync slot (max {})...", limiter.max()),
+            Some("pending"),
+        );
 
+        limiter.acquire().await;
         let _ = db.update_sync_task(&task_id, 1, "Queued job started...", Some("running"));
         let result = work().await;
-        drop(permit);
+        limiter.release();
 
         if let Err(e) = result {
             let msg = format!("Job failed: {e}");

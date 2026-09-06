@@ -2,10 +2,19 @@ use std::path::{Path, PathBuf};
 
 use crate::ai::{self, apply_enrichment};
 use crate::config::Config;
-use crate::db::{Database, LlmSettings};
+use crate::db::{Database, LlmSettings, SyncSettings};
 use crate::fetcher;
 use crate::git;
 use crate::parser::{self, ParsedBundle};
+
+fn resolve_sync(db: &Database, config: &Config) -> SyncSettings {
+    db.get_sync_settings(config).unwrap_or(SyncSettings {
+        max_jobs: config.max_jobs,
+        parse_concurrency: config.parse_concurrency,
+        ingest_batch_size: config.ingest_batch_size,
+        download_concurrency: config.download_concurrency,
+    })
+}
 
 pub async fn sync_library(
     db: &Database,
@@ -120,8 +129,11 @@ pub async fn ingest_files(
     let library_id_owned = library_id.to_string();
     let root = local_path.to_path_buf();
     let paths = relative_paths.to_vec();
+    let parse_conc = config
+        .map(|c| resolve_sync(db, c).parse_concurrency)
+        .unwrap_or(0);
     let parsed = tokio::task::spawn_blocking(move || {
-        parser::parse_paths_parallel(&library_id_owned, &root, &paths)
+        parser::parse_paths_parallel(&library_id_owned, &root, &paths, parse_conc)
     })
     .await?;
 
@@ -167,7 +179,9 @@ pub async fn ingest_files(
         library_name.to_string()
     };
 
-    let batch_size = config.map(|c| c.ingest_batch_size).unwrap_or(250);
+    let batch_size = config
+        .map(|c| resolve_sync(db, c).ingest_batch_size)
+        .unwrap_or(250);
     store_parsed_batched(
         db,
         task_id,
@@ -303,8 +317,9 @@ pub async fn fetch_and_ingest(
         None,
     )?;
     std::fs::create_dir_all(local_path)?;
+    let sync = resolve_sync(db, config);
     let written =
-        fetcher::download_urls(&plan.urls, local_path, config.download_concurrency).await?;
+        fetcher::download_urls(&plan.urls, local_path, sync.download_concurrency).await?;
 
     db.update_sync_task(task_id, 40, "Download complete, parsing...", None)?;
     ingest_files(
@@ -435,11 +450,20 @@ async fn ingest_directory_chunked(
     }
 
     let total = paths.len();
-    let batch_size = config.ingest_batch_size;
+    let sync = resolve_sync(db, config);
+    let batch_size = sync.ingest_batch_size;
+    let parse_conc = sync.parse_concurrency;
     db.update_sync_task(
         task_id,
         45,
-        &format!("Indexing {total} components in batches of {batch_size}..."),
+        &format!(
+            "Indexing {total} components (batch {batch_size}, parse threads {})...",
+            if parse_conc == 0 {
+                "auto".into()
+            } else {
+                parse_conc.to_string()
+            }
+        ),
         None,
     )?;
 
@@ -449,7 +473,7 @@ async fn ingest_directory_chunked(
         let root = local_path.to_path_buf();
         let chunk_owned = chunk.to_vec();
         let mut parsed = tokio::task::spawn_blocking(move || {
-            parser::parse_paths_parallel(&library_id_owned, &root, &chunk_owned)
+            parser::parse_paths_parallel(&library_id_owned, &root, &chunk_owned, parse_conc)
         })
         .await?;
 

@@ -39,6 +39,7 @@ async fn main() -> anyhow::Result<()> {
     db.log("info", "CompiraMCP server starting", None)?;
     let _ = db.cleanup_expired_sessions();
     let _ = db.bootstrap_llm_settings(&config);
+    let _ = db.bootstrap_sync_settings(&config);
 
     let admin_password = config
         .admin_password

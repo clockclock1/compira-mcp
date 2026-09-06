@@ -1,8 +1,9 @@
 import { Link, useParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { api, Component, ComponentExample } from "../api/client";
+import ComponentPreview from "../components/ComponentPreview";
 
-type Tab = "docs" | "props" | "events" | "slots" | "examples" | "source";
+type Tab = "preview" | "docs" | "props" | "events" | "slots" | "examples" | "source";
 
 export default function ComponentDetail() {
   const { id } = useParams<{ id: string }>();
@@ -10,7 +11,7 @@ export default function ComponentDetail() {
   const [source, setSource] = useState("");
   const [docs, setDocs] = useState("");
   const [examples, setExamples] = useState<ComponentExample[]>([]);
-  const [tab, setTab] = useState<Tab>("props");
+  const [tab, setTab] = useState<Tab>("preview");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -74,8 +75,11 @@ export default function ComponentDetail() {
           <button
             className="btn btn-ghost"
             style={{ background: "var(--bg-hover)", borderColor: "transparent", color: "var(--primary-light)" }}
-            onClick={() => setTab("source")}
+            onClick={() => setTab("preview")}
           >
+            预览效果
+          </button>
+          <button className="btn btn-ghost" onClick={() => setTab("source")}>
             查看源码
           </button>
         </div>
@@ -84,6 +88,7 @@ export default function ComponentDetail() {
       <div className="tabs">
         {(
           [
+            ["preview", "预览"],
             ["docs", "文档"],
             ["props", "Props"],
             ["events", "Events"],
@@ -101,6 +106,24 @@ export default function ComponentDetail() {
           </div>
         ))}
       </div>
+
+      {tab === "preview" && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card-header">
+            <div className="card-title">实时预览</div>
+            <span className="chip-file">{component.file_path}</span>
+          </div>
+          <div className="divider" />
+          <div className="card-body" style={{ padding: 12 }}>
+            <ComponentPreview
+              name={component.name}
+              framework={component.framework}
+              source={source}
+              exampleCode={examples[0]?.code}
+            />
+          </div>
+        </div>
+      )}
 
       {tab === "props" && (
         <div className="card" style={{ marginBottom: 16 }}>

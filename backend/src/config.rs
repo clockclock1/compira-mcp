@@ -20,6 +20,8 @@ pub struct Config {
     pub ingest_batch_size: usize,
     /// Max parallel HTTP downloads during AI fetch.
     pub download_concurrency: usize,
+    /// Rayon threads used when parsing component files.
+    pub parse_concurrency: usize,
 }
 
 impl Config {
@@ -55,6 +57,7 @@ impl Config {
             max_jobs: env_usize("COMPIRA_MAX_JOBS", 3).clamp(1, 64),
             ingest_batch_size: env_usize("COMPIRA_INGEST_BATCH_SIZE", 250).clamp(20, 5000),
             download_concurrency: env_usize("COMPIRA_DOWNLOAD_CONCURRENCY", 8).clamp(1, 64),
+            parse_concurrency: env_usize("COMPIRA_PARSE_CONCURRENCY", 0), // 0 = num_cpus
         }
     }
 

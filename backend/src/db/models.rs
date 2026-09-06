@@ -157,3 +157,16 @@ pub struct LlmSettingsPublic {
     pub base_url: String,
     pub model: String,
 }
+
+/// Sync / ingest concurrency settings (admin configurable).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncSettings {
+    /// Max libraries syncing/ingesting in parallel (adds are unlimited).
+    pub max_jobs: usize,
+    /// Parallel file parse threads (0 = auto / CPU count).
+    pub parse_concurrency: usize,
+    /// Components per DB write transaction.
+    pub ingest_batch_size: usize,
+    /// Parallel HTTP downloads for AI fetch.
+    pub download_concurrency: usize,
+}

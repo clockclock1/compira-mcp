@@ -199,6 +199,25 @@ export const api = {
         base_url: string;
         model: string;
       }>("/settings/llm", { method: "PUT", body: JSON.stringify(data) }),
+    sync: () =>
+      request<{
+        max_jobs: number;
+        parse_concurrency: number;
+        ingest_batch_size: number;
+        download_concurrency: number;
+      }>("/settings/sync"),
+    updateSync: (data: {
+      max_jobs?: number;
+      parse_concurrency?: number;
+      ingest_batch_size?: number;
+      download_concurrency?: number;
+    }) =>
+      request<{
+        max_jobs: number;
+        parse_concurrency: number;
+        ingest_batch_size: number;
+        download_concurrency: number;
+      }>("/settings/sync", { method: "PUT", body: JSON.stringify(data) }),
   },
   tasks: {
     list: (libraryId?: string) =>

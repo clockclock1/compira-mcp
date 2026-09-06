@@ -787,6 +787,24 @@ textarea.modal-input{min-height:80px;}
 .sync-item-link{transition:background .2s,transform .2s;}
 .sync-item-link:hover{transform:translateX(3px);}
 
+/* Component live preview */
+.preview-shell{
+  border:1px solid rgba(45,212,191,0.18);
+  border-radius:12px;
+  overflow:hidden;
+  background:rgba(8,14,24,0.92);
+}
+.preview-toolbar{
+  display:flex;align-items:center;gap:10px;
+  padding:10px 14px;
+  border-bottom:1px solid rgba(45,212,191,0.12);
+  background:rgba(13,30,36,0.55);
+}
+.preview-frame{
+  display:block;width:100%;height:min(62vh,520px);
+  border:0;background:#0b1220;
+}
+
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;}
 }

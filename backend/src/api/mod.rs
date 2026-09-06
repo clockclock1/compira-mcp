@@ -40,6 +40,7 @@ pub fn routes(state: AppState) -> Router {
         .route("/libraries/{id}/components", get(list_components))
         .route("/ai/status", get(ai_status))
         .route("/settings/llm", get(get_llm_settings).put(update_llm_settings))
+        .route("/settings/sync", get(get_sync_settings).put(update_sync_settings))
         .route("/components/{id}", get(get_component))
         .route("/components/{id}/source", get(get_component_source))
         .route("/components/{id}/docs", get(get_component_docs))
@@ -255,6 +256,57 @@ async fn update_llm_settings(
 
     match state.db.get_llm_settings_public(state.config.as_ref()) {
         Ok(s) => Json(s).into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn get_sync_settings(auth: AuthUser, State(state): State<AppState>) -> impl IntoResponse {
+    if !auth.is_admin() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match state.db.get_sync_settings(state.config.as_ref()) {
+        Ok(s) => Json(s).into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct UpdateSyncSettingsReq {
+    pub max_jobs: Option<usize>,
+    pub parse_concurrency: Option<usize>,
+    pub ingest_batch_size: Option<usize>,
+    pub download_concurrency: Option<usize>,
+}
+
+async fn update_sync_settings(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Json(req): Json<UpdateSyncSettingsReq>,
+) -> impl IntoResponse {
+    if !auth.is_admin() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if let Err(e) = state.db.update_sync_settings(
+        req.max_jobs,
+        req.parse_concurrency,
+        req.ingest_batch_size,
+        req.download_concurrency,
+    ) {
+        return err_response(e);
+    }
+    match state.db.get_sync_settings(state.config.as_ref()) {
+        Ok(s) => {
+            state.tasks.apply_sync_settings(s.max_jobs);
+            let _ = state.db.log(
+                "info",
+                &format!(
+                    "Admin updated sync settings: max_jobs={}, parse={}, batch={}, download={}",
+                    s.max_jobs, s.parse_concurrency, s.ingest_batch_size, s.download_concurrency
+                ),
+                None,
+            );
+            Json(s).into_response()
+        }
         Err(e) => err_response(e),
     }
 }

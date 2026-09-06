@@ -44,6 +44,8 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [syncingAll, setSyncingAll] = useState(false);
+  const [syncMsg, setSyncMsg] = useState("");
 
   const load = () => {
     setRefreshing(true);
@@ -60,6 +62,33 @@ export default function Dashboard() {
         setRefreshing(false);
         setLoaded(true);
       });
+  };
+
+  /**
+   * Enqueue sync for every library; actual parallelism is capped by settings.
+   */
+  const handleSyncAll = async () => {
+    if (libraries.length === 0) return;
+    setSyncingAll(true);
+    setSyncMsg("");
+    setError("");
+    let ok = 0;
+    const errors: string[] = [];
+    for (const lib of libraries) {
+      try {
+        await api.libraries.sync(lib.id);
+        ok += 1;
+      } catch (err) {
+        errors.push(`${lib.name}: ${err instanceof Error ? err.message : "失败"}`);
+      }
+    }
+    setSyncingAll(false);
+    if (errors.length) {
+      setError(`已入队 ${ok} 个；失败 ${errors.length}：${errors.slice(0, 3).join("；")}`);
+    } else {
+      setSyncMsg(`已一键入队 ${ok} 个组件库同步（并行数见「系统设置」）`);
+    }
+    load();
   };
 
   useEffect(() => {
@@ -141,6 +170,18 @@ export default function Dashboard() {
               {failedLibs} 个库失败
             </Link>
           )}
+          <button
+            className="btn btn-primary"
+            onClick={handleSyncAll}
+            disabled={syncingAll || libraries.length === 0}
+            title="一键同步全部组件库（并行数可在系统设置配置）"
+          >
+            <svg viewBox="0 0 24 24">
+              <path d="M21 12a9 9 0 1 1-2.6-6.4" />
+              <path d="M21 3v6h-6" />
+            </svg>
+            {syncingAll ? "入队中…" : "一键同步"}
+          </button>
           <button className="btn btn-ghost" onClick={load} disabled={refreshing}>
             <svg viewBox="0 0 24 24">
               <path d="M21 12a9 9 0 1 1-2.6-6.4" />
@@ -153,6 +194,9 @@ export default function Dashboard() {
 
       {error && (
         <AlertBanner title="加载失败" message={error} onClose={() => setError("")} />
+      )}
+      {syncMsg && !error && (
+        <p style={{ color: "var(--green)", fontSize: 12.5, marginBottom: 12 }}>{syncMsg}</p>
       )}
 
       {!loaded && <StatSkeleton count={4} />}

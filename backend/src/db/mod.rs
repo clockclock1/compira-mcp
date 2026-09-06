@@ -1276,6 +1276,104 @@ impl Database {
         }
         Ok(())
     }
+
+    fn parse_setting_usize(raw: Option<String>, default: usize) -> usize {
+        raw.and_then(|s| s.trim().parse().ok()).unwrap_or(default)
+    }
+
+    pub fn get_sync_settings(
+        &self,
+        defaults: &crate::config::Config,
+    ) -> anyhow::Result<crate::db::SyncSettings> {
+        Ok(crate::db::SyncSettings {
+            max_jobs: Self::parse_setting_usize(
+                self.get_setting("sync_max_jobs")?,
+                defaults.max_jobs,
+            )
+            .clamp(1, 64),
+            parse_concurrency: Self::parse_setting_usize(
+                self.get_setting("sync_parse_concurrency")?,
+                defaults.parse_concurrency,
+            )
+            .min(256),
+            ingest_batch_size: Self::parse_setting_usize(
+                self.get_setting("sync_ingest_batch_size")?,
+                defaults.ingest_batch_size,
+            )
+            .clamp(20, 5000),
+            download_concurrency: Self::parse_setting_usize(
+                self.get_setting("sync_download_concurrency")?,
+                defaults.download_concurrency,
+            )
+            .clamp(1, 64),
+        })
+    }
+
+    pub fn update_sync_settings(
+        &self,
+        max_jobs: Option<usize>,
+        parse_concurrency: Option<usize>,
+        ingest_batch_size: Option<usize>,
+        download_concurrency: Option<usize>,
+    ) -> anyhow::Result<crate::db::SyncSettings> {
+        if let Some(v) = max_jobs {
+            self.set_setting("sync_max_jobs", &v.clamp(1, 64).to_string())?;
+        }
+        if let Some(v) = parse_concurrency {
+            self.set_setting("sync_parse_concurrency", &v.min(256).to_string())?;
+        }
+        if let Some(v) = ingest_batch_size {
+            self.set_setting("sync_ingest_batch_size", &v.clamp(20, 5000).to_string())?;
+        }
+        if let Some(v) = download_concurrency {
+            self.set_setting("sync_download_concurrency", &v.clamp(1, 64).to_string())?;
+        }
+        // Caller must pass defaults via get after update — we need config.
+        // Return by re-reading with a temporary read of stored values only.
+        Ok(crate::db::SyncSettings {
+            max_jobs: Self::parse_setting_usize(self.get_setting("sync_max_jobs")?, 3).clamp(1, 64),
+            parse_concurrency: Self::parse_setting_usize(
+                self.get_setting("sync_parse_concurrency")?,
+                0,
+            )
+            .min(256),
+            ingest_batch_size: Self::parse_setting_usize(
+                self.get_setting("sync_ingest_batch_size")?,
+                250,
+            )
+            .clamp(20, 5000),
+            download_concurrency: Self::parse_setting_usize(
+                self.get_setting("sync_download_concurrency")?,
+                8,
+            )
+            .clamp(1, 64),
+        })
+    }
+
+    pub fn bootstrap_sync_settings(&self, defaults: &crate::config::Config) -> anyhow::Result<()> {
+        if self.get_setting("sync_max_jobs")?.is_none() {
+            self.set_setting("sync_max_jobs", &defaults.max_jobs.to_string())?;
+        }
+        if self.get_setting("sync_parse_concurrency")?.is_none() {
+            self.set_setting(
+                "sync_parse_concurrency",
+                &defaults.parse_concurrency.to_string(),
+            )?;
+        }
+        if self.get_setting("sync_ingest_batch_size")?.is_none() {
+            self.set_setting(
+                "sync_ingest_batch_size",
+                &defaults.ingest_batch_size.to_string(),
+            )?;
+        }
+        if self.get_setting("sync_download_concurrency")?.is_none() {
+            self.set_setting(
+                "sync_download_concurrency",
+                &defaults.download_concurrency.to_string(),
+            )?;
+        }
+        Ok(())
+    }
 }
 
 pub fn hash_key(key: &str) -> String {

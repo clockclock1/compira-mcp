@@ -135,23 +135,42 @@ pub fn collect_component_paths(root: &Path, bulk: bool) -> Vec<String> {
 }
 
 /// Parallel parse of relative paths. Failures are logged and skipped.
+/// `concurrency` 0 = Rayon default (all CPUs).
 pub fn parse_paths_parallel(
     library_id: &str,
     root: &Path,
     relative_paths: &[String],
+    concurrency: usize,
 ) -> Vec<ParsedBundle> {
     let root = root.to_path_buf();
     let library_id = library_id.to_string();
-    relative_paths
-        .par_iter()
-        .filter_map(|rel| match parse_component_file(&library_id, &root, rel) {
-            Ok(item) => Some(item),
-            Err(e) => {
-                tracing::warn!("skip {rel}: {e}");
-                None
-            }
-        })
-        .collect()
+    let work = || {
+        relative_paths
+            .par_iter()
+            .filter_map(|rel| match parse_component_file(&library_id, &root, rel) {
+                Ok(item) => Some(item),
+                Err(e) => {
+                    tracing::warn!("skip {rel}: {e}");
+                    None
+                }
+            })
+            .collect()
+    };
+
+    if concurrency == 0 {
+        return work();
+    }
+
+    match rayon::ThreadPoolBuilder::new()
+        .num_threads(concurrency.clamp(1, 256))
+        .build()
+    {
+        Ok(pool) => pool.install(work),
+        Err(e) => {
+            tracing::warn!("failed to build parse pool ({e}), using default");
+            work()
+        }
+    }
 }
 
 pub fn scan_and_parse_directory(
@@ -159,7 +178,7 @@ pub fn scan_and_parse_directory(
     root: &Path,
 ) -> anyhow::Result<Vec<ParsedBundle>> {
     let paths = collect_component_paths(root, true);
-    Ok(parse_paths_parallel(library_id, root, &paths))
+    Ok(parse_paths_parallel(library_id, root, &paths, 0))
 }
 
 fn should_skip(path: &Path) -> bool {
