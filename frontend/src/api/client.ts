@@ -9,17 +9,55 @@ import type {
 export * from "./types";
 
 const TOKEN_STORAGE = "compira_token";
+const EXPIRES_STORAGE = "compira_expires_at";
+const REMEMBER_STORAGE = "compira_remember";
 
-export function getToken(): string {
-  return localStorage.getItem(TOKEN_STORAGE) || "";
+function tokenStore(remember?: boolean): Storage {
+  if (remember === undefined) {
+    const flag = localStorage.getItem(REMEMBER_STORAGE);
+    if (flag === "0") return sessionStorage;
+    return localStorage;
+  }
+  return remember ? localStorage : sessionStorage;
 }
 
-export function setToken(token: string) {
-  localStorage.setItem(TOKEN_STORAGE, token);
+export function getToken(): string {
+  return (
+    localStorage.getItem(TOKEN_STORAGE) ||
+    sessionStorage.getItem(TOKEN_STORAGE) ||
+    ""
+  );
+}
+
+export function getExpiresAt(): string | null {
+  return (
+    localStorage.getItem(EXPIRES_STORAGE) ||
+    sessionStorage.getItem(EXPIRES_STORAGE) ||
+    null
+  );
+}
+
+export function setToken(token: string, opts?: { remember?: boolean; expiresAt?: string }) {
+  const remember = opts?.remember ?? true;
+  clearToken();
+  localStorage.setItem(REMEMBER_STORAGE, remember ? "1" : "0");
+  const store = tokenStore(remember);
+  store.setItem(TOKEN_STORAGE, token);
+  if (opts?.expiresAt) {
+    store.setItem(EXPIRES_STORAGE, opts.expiresAt);
+  }
+}
+
+export function setExpiresAt(expiresAt: string) {
+  const remember = localStorage.getItem(REMEMBER_STORAGE) !== "0";
+  tokenStore(remember).setItem(EXPIRES_STORAGE, expiresAt);
 }
 
 export function clearToken() {
   localStorage.removeItem(TOKEN_STORAGE);
+  localStorage.removeItem(EXPIRES_STORAGE);
+  sessionStorage.removeItem(TOKEN_STORAGE);
+  sessionStorage.removeItem(EXPIRES_STORAGE);
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -38,6 +76,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
   if (!res.ok) {
     const body = await res.text();
+    if (res.status === 403 && path === "/auth/account") {
+      throw new Error(body || "当前密码不正确");
+    }
+    if (res.status === 409 && path === "/auth/account") {
+      throw new Error(body || "用户名已被占用");
+    }
     throw new Error(body || res.statusText);
   }
   if (res.status === 204) return undefined as T;
@@ -96,13 +140,32 @@ export interface Stats {
 
 export const api = {
   auth: {
-    login: (username: string, password: string) =>
-      request<{ token: string; user: User }>("/auth/login", {
+    login: (username: string, password: string, rememberMe = true) =>
+      request<{
+        token: string;
+        user: User;
+        expires_at: string;
+        remember_me: boolean;
+      }>("/auth/login", {
         method: "POST",
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({
+          username,
+          password,
+          remember_me: rememberMe,
+        }),
       }),
     logout: () => request<void>("/auth/logout", { method: "POST" }),
-    me: () => request<{ user: User }>("/auth/me"),
+    me: () =>
+      request<{ user: User; expires_at?: string | null }>("/auth/me"),
+    updateAccount: (data: {
+      username?: string;
+      current_password: string;
+      new_password?: string;
+    }) =>
+      request<{ user: User; expires_at?: string | null }>("/auth/account", {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
   },
   users: {
     list: () => request<User[]>("/users"),
@@ -218,6 +281,22 @@ export const api = {
         ingest_batch_size: number;
         download_concurrency: number;
       }>("/settings/sync", { method: "PUT", body: JSON.stringify(data) }),
+    auth: () =>
+      request<{
+        session_ttl_hours: number;
+        remember_me_ttl_hours: number;
+        sliding: boolean;
+      }>("/settings/auth"),
+    updateAuth: (data: {
+      session_ttl_hours?: number;
+      remember_me_ttl_hours?: number;
+      sliding?: boolean;
+    }) =>
+      request<{
+        session_ttl_hours: number;
+        remember_me_ttl_hours: number;
+        sliding: boolean;
+      }>("/settings/auth", { method: "PUT", body: JSON.stringify(data) }),
   },
   tasks: {
     list: (libraryId?: string) =>

@@ -170,3 +170,14 @@ pub struct SyncSettings {
     /// Parallel HTTP downloads for AI fetch.
     pub download_concurrency: usize,
 }
+
+/// Login session policy (admin configurable).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthSettings {
+    /// Hours until session expires without "remember me".
+    pub session_ttl_hours: u64,
+    /// Hours until session expires with "remember me".
+    pub remember_me_ttl_hours: u64,
+    /// When true, activity extends the session expiry.
+    pub sliding: bool,
+}

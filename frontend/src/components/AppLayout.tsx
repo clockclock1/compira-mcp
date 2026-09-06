@@ -76,7 +76,6 @@ const navItems: { to: string; label: string; adminOnly?: boolean; icon: ReactNod
   {
     to: "/settings",
     label: "系统设置",
-    adminOnly: true,
     icon: (
       <svg viewBox="0 0 24 24">
         <circle cx="12" cy="12" r="3" />

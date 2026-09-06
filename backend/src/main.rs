@@ -40,6 +40,7 @@ async fn main() -> anyhow::Result<()> {
     let _ = db.cleanup_expired_sessions();
     let _ = db.bootstrap_llm_settings(&config);
     let _ = db.bootstrap_sync_settings(&config);
+    let _ = db.bootstrap_auth_settings(&config);
 
     let admin_password = config
         .admin_password
@@ -117,6 +118,20 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("  REST API: http://{addr}/api");
     tracing::info!("  MCP endpoint: http://{addr}/mcp");
     tracing::info!("  Admin UI: http://{addr}/");
+
+    // Periodically purge expired login sessions.
+    {
+        let db_cleanup = db.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                ticker.tick().await;
+                if let Err(e) = db_cleanup.cleanup_expired_sessions() {
+                    tracing::warn!("session cleanup failed: {e}");
+                }
+            }
+        });
+    }
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app)

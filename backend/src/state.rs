@@ -28,7 +28,20 @@ impl AppState {
     }
 
     pub async fn verify_session(&self, token: &str) -> Option<User> {
-        self.db.verify_session(token).ok().flatten()
+        let auth = self
+            .db
+            .get_auth_settings(self.config.as_ref())
+            .unwrap_or(crate::db::AuthSettings {
+                session_ttl_hours: self.config.session_ttl_hours,
+                remember_me_ttl_hours: self.config.remember_me_ttl_hours,
+                sliding: self.config.session_sliding,
+            });
+        // Sliding uses the shorter base TTL so remember-me sessions still expire eventually.
+        self.db
+            .verify_session_sliding(token, auth.sliding, auth.session_ttl_hours)
+            .ok()
+            .flatten()
+            .map(|(u, _)| u)
     }
 }
 

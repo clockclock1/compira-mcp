@@ -22,6 +22,12 @@ pub struct Config {
     pub download_concurrency: usize,
     /// Rayon threads used when parsing component files.
     pub parse_concurrency: usize,
+    /// Default session TTL in hours (non–remember-me).
+    pub session_ttl_hours: u64,
+    /// Session TTL when "remember me" is checked.
+    pub remember_me_ttl_hours: u64,
+    /// Extend session expiry on activity.
+    pub session_sliding: bool,
 }
 
 impl Config {
@@ -58,6 +64,9 @@ impl Config {
             ingest_batch_size: env_usize("COMPIRA_INGEST_BATCH_SIZE", 250).clamp(20, 5000),
             download_concurrency: env_usize("COMPIRA_DOWNLOAD_CONCURRENCY", 8).clamp(1, 64),
             parse_concurrency: env_usize("COMPIRA_PARSE_CONCURRENCY", 0), // 0 = num_cpus
+            session_ttl_hours: env_u64("COMPIRA_SESSION_TTL_HOURS", 8).clamp(1, 24 * 90),
+            remember_me_ttl_hours: env_u64("COMPIRA_REMEMBER_TTL_HOURS", 168).clamp(1, 24 * 365),
+            session_sliding: env_bool("COMPIRA_SESSION_SLIDING", true),
         }
     }
 
@@ -73,6 +82,20 @@ fn env_usize(key: &str, default: usize) -> usize {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(default)
+}
+
+fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_bool(key: &str, default: bool) -> bool {
+    match std::env::var(key) {
+        Ok(v) => matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+        Err(_) => default,
+    }
 }
 
 /// Resolve data dir to an absolute path. Avoid `canonicalize` on Windows so we

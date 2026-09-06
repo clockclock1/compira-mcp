@@ -1091,6 +1091,15 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_user_username(&self, id: &str, username: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE users SET username = ?1 WHERE id = ?2",
+            params![username, id],
+        )?;
+        Ok(())
+    }
+
     pub fn update_user_role(&self, id: &str, role: &str) -> anyhow::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("UPDATE users SET role = ?1 WHERE id = ?2", params![role, id])?;
@@ -1133,21 +1142,74 @@ impl Database {
         Ok(())
     }
 
-    pub fn verify_session(&self, token: &str) -> anyhow::Result<Option<User>> {
+    /// Delete all sessions for a user, optionally keeping the current token.
+    pub fn delete_user_sessions(
+        &self,
+        user_id: &str,
+        except_token: Option<&str>,
+    ) -> anyhow::Result<usize> {
         let conn = self.conn.lock().unwrap();
-        let now = Utc::now().to_rfc3339();
-        let row: Option<(String,)> = conn
+        let n = if let Some(token) = except_token {
+            conn.execute(
+                "DELETE FROM sessions WHERE user_id = ?1 AND token_hash != ?2",
+                params![user_id, hash_key(token)],
+            )?
+        } else {
+            conn.execute("DELETE FROM sessions WHERE user_id = ?1", [user_id])?
+        };
+        Ok(n)
+    }
+
+    pub fn session_expires_at(&self, token: &str) -> anyhow::Result<Option<DateTime<Utc>>> {
+        let conn = self.conn.lock().unwrap();
+        let row: Option<String> = conn
             .query_row(
-                "SELECT user_id FROM sessions WHERE token_hash = ?1 AND expires_at > ?2",
-                params![hash_key(token), now],
-                |row| Ok((row.get(0)?,)),
+                "SELECT expires_at FROM sessions WHERE token_hash = ?1",
+                [hash_key(token)],
+                |r| r.get(0),
             )
             .optional()?;
-        let Some((user_id,)) = row else {
+        Ok(row.and_then(|s| s.parse().ok()))
+    }
+
+    pub fn verify_session(&self, token: &str) -> anyhow::Result<Option<User>> {
+        Ok(self
+            .verify_session_sliding(token, false, 0)?
+            .map(|(u, _)| u))
+    }
+
+    /// Verify session; when `sliding`, extend expiry to now + extend_hours if later.
+    pub fn verify_session_sliding(
+        &self,
+        token: &str,
+        sliding: bool,
+        extend_hours: u64,
+    ) -> anyhow::Result<Option<(User, DateTime<Utc>)>> {
+        let now = Utc::now();
+        let conn = self.conn.lock().unwrap();
+        let row: Option<(String, String)> = conn
+            .query_row(
+                "SELECT user_id, expires_at FROM sessions WHERE token_hash = ?1 AND expires_at > ?2",
+                params![hash_key(token), now.to_rfc3339()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((user_id, expires_raw)) = row else {
             return Ok(None);
         };
+        let mut expires: DateTime<Utc> = expires_raw.parse().unwrap_or(now);
+        if sliding && extend_hours > 0 {
+            let next = now + chrono::Duration::hours(extend_hours as i64);
+            if next > expires {
+                conn.execute(
+                    "UPDATE sessions SET expires_at = ?1 WHERE token_hash = ?2",
+                    params![next.to_rfc3339(), hash_key(token)],
+                )?;
+                expires = next;
+            }
+        }
         drop(conn);
-        self.get_user(&user_id)
+        Ok(self.get_user(&user_id)?.map(|u| (u, expires)))
     }
 
     pub fn cleanup_expired_sessions(&self) -> anyhow::Result<()> {
@@ -1373,6 +1435,87 @@ impl Database {
             )?;
         }
         Ok(())
+    }
+
+    pub fn get_auth_settings(
+        &self,
+        defaults: &crate::config::Config,
+    ) -> anyhow::Result<crate::db::AuthSettings> {
+        let sliding = match self.get_setting("auth_session_sliding")? {
+            Some(v) => matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            ),
+            None => defaults.session_sliding,
+        };
+        Ok(crate::db::AuthSettings {
+            session_ttl_hours: Self::parse_setting_u64(
+                self.get_setting("auth_session_ttl_hours")?,
+                defaults.session_ttl_hours,
+            )
+            .clamp(1, 24 * 90),
+            remember_me_ttl_hours: Self::parse_setting_u64(
+                self.get_setting("auth_remember_ttl_hours")?,
+                defaults.remember_me_ttl_hours,
+            )
+            .clamp(1, 24 * 365),
+            sliding,
+        })
+    }
+
+    pub fn update_auth_settings(
+        &self,
+        session_ttl_hours: Option<u64>,
+        remember_me_ttl_hours: Option<u64>,
+        sliding: Option<bool>,
+        defaults: &crate::config::Config,
+    ) -> anyhow::Result<crate::db::AuthSettings> {
+        if let Some(v) = session_ttl_hours {
+            self.set_setting(
+                "auth_session_ttl_hours",
+                &v.clamp(1, 24 * 90).to_string(),
+            )?;
+        }
+        if let Some(v) = remember_me_ttl_hours {
+            self.set_setting(
+                "auth_remember_ttl_hours",
+                &v.clamp(1, 24 * 365).to_string(),
+            )?;
+        }
+        if let Some(v) = sliding {
+            self.set_setting("auth_session_sliding", if v { "true" } else { "false" })?;
+        }
+        self.get_auth_settings(defaults)
+    }
+
+    pub fn bootstrap_auth_settings(&self, defaults: &crate::config::Config) -> anyhow::Result<()> {
+        if self.get_setting("auth_session_ttl_hours")?.is_none() {
+            self.set_setting(
+                "auth_session_ttl_hours",
+                &defaults.session_ttl_hours.to_string(),
+            )?;
+        }
+        if self.get_setting("auth_remember_ttl_hours")?.is_none() {
+            self.set_setting(
+                "auth_remember_ttl_hours",
+                &defaults.remember_me_ttl_hours.to_string(),
+            )?;
+        }
+        if self.get_setting("auth_session_sliding")?.is_none() {
+            self.set_setting(
+                "auth_session_sliding",
+                if defaults.session_sliding {
+                    "true"
+                } else {
+                    "false"
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    fn parse_setting_u64(raw: Option<String>, default: u64) -> u64 {
+        raw.and_then(|s| s.trim().parse().ok()).unwrap_or(default)
     }
 }
 

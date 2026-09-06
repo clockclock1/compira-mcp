@@ -15,7 +15,7 @@ function LogoIcon() {
 
 export default function Login() {
   const { user, login, loading } = useAuth();
-  const [username, setUsername] = useState("admin");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -30,7 +30,7 @@ export default function Login() {
     setError("");
     setSubmitting(true);
     try {
-      await login(username, password);
+      await login(username, password, remember);
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败");
     } finally {
@@ -68,7 +68,7 @@ export default function Login() {
               autoComplete="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="admin"
+              placeholder="用户名"
             />
           </div>
           <div className="login-field field-reveal" style={{ marginTop: 16, ["--d" as string]: "0.16s" }}>
@@ -99,7 +99,7 @@ export default function Login() {
                   </svg>
                 )}
               </span>
-              记住我
+              记住我（延长登录有效期）
             </label>
           </div>
           {error && (
@@ -113,7 +113,7 @@ export default function Login() {
             </ShineButton>
           </div>
         </form>
-        <div className="login-note">首次启动默认账号 admin / admin123</div>
+        <div className="login-note">账号可在「系统设置」修改；会话到期后需重新登录</div>
       </div>
       <div className="login-copyright">Copyright 2026 CompiraMCP</div>
       <div className="login-version chip-glow">v0.1.0</div>

@@ -23,6 +23,7 @@ pub fn routes(state: AppState) -> Router {
     let protected = Router::new()
         .route("/auth/logout", post(auth::logout))
         .route("/auth/me", get(auth::me))
+        .route("/auth/account", patch(auth::update_account))
         .route("/users", get(auth::list_users).post(auth::create_user))
         .route(
             "/users/{id}",
@@ -41,6 +42,7 @@ pub fn routes(state: AppState) -> Router {
         .route("/ai/status", get(ai_status))
         .route("/settings/llm", get(get_llm_settings).put(update_llm_settings))
         .route("/settings/sync", get(get_sync_settings).put(update_sync_settings))
+        .route("/settings/auth", get(get_auth_settings).put(update_auth_settings))
         .route("/components/{id}", get(get_component))
         .route("/components/{id}/source", get(get_component_source))
         .route("/components/{id}/docs", get(get_component_docs))
@@ -302,6 +304,52 @@ async fn update_sync_settings(
                 &format!(
                     "Admin updated sync settings: max_jobs={}, parse={}, batch={}, download={}",
                     s.max_jobs, s.parse_concurrency, s.ingest_batch_size, s.download_concurrency
+                ),
+                None,
+            );
+            Json(s).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+async fn get_auth_settings(auth: AuthUser, State(state): State<AppState>) -> impl IntoResponse {
+    if !auth.is_admin() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match state.db.get_auth_settings(state.config.as_ref()) {
+        Ok(s) => Json(s).into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct UpdateAuthSettingsReq {
+    pub session_ttl_hours: Option<u64>,
+    pub remember_me_ttl_hours: Option<u64>,
+    pub sliding: Option<bool>,
+}
+
+async fn update_auth_settings(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Json(req): Json<UpdateAuthSettingsReq>,
+) -> impl IntoResponse {
+    if !auth.is_admin() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match state.db.update_auth_settings(
+        req.session_ttl_hours,
+        req.remember_me_ttl_hours,
+        req.sliding,
+        state.config.as_ref(),
+    ) {
+        Ok(s) => {
+            let _ = state.db.log(
+                "info",
+                &format!(
+                    "Admin updated auth settings: ttl={}h, remember={}h, sliding={}",
+                    s.session_ttl_hours, s.remember_me_ttl_hours, s.sliding
                 ),
                 None,
             );
