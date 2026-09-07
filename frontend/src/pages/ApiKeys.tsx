@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api, ApiKey } from "../api/client";
+import { copyToClipboard } from "../lib/clipboard";
 
 /**
  * API Keys admin page — secrets are stored server-side and always copyable.
@@ -35,12 +36,9 @@ export default function ApiKeys() {
    * @param {string} [okMsg]
    */
   const copyText = async (text: string, okMsg = "已复制到剪贴板") => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setToast(okMsg);
-    } catch {
-      setError("复制失败，请手动选择文本");
-    }
+    const ok = await copyToClipboard(text);
+    if (ok) setToast(okMsg);
+    else setError("复制失败，请手动选择文本");
   };
 
   const handleCreate = async (e: FormEvent) => {

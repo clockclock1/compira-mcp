@@ -71,7 +71,7 @@ export function GlassCard({ children, className = "", style, spotlight = true }:
   return (
     <div
       ref={ref}
-      className={`glass-card ${className}`.trim()}
+      className={`card glass-card ${className}`.trim()}
       style={style}
       onMouseMove={onMove}
     >

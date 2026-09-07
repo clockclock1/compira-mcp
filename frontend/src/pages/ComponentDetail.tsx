@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { api, Component, ComponentExample } from "../api/client";
 import ComponentPreview from "../components/ComponentPreview";
+import { copyToClipboard } from "../lib/clipboard";
 
 type Tab = "preview" | "docs" | "props" | "events" | "slots" | "examples" | "source";
 
@@ -13,6 +14,7 @@ export default function ComponentDetail() {
   const [examples, setExamples] = useState<ComponentExample[]>([]);
   const [tab, setTab] = useState<Tab>("preview");
   const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -39,9 +41,13 @@ export default function ComponentDetail() {
   if (error) return <p className="error">{error}</p>;
   if (!component) return null;
 
-  const copyImport = () => {
+  const copyImport = async () => {
     const stmt = `import ${component.name} from '${component.file_path}'`;
-    navigator.clipboard?.writeText(stmt).catch(() => {});
+    const ok = await copyToClipboard(stmt);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    }
   };
 
   return (
@@ -70,7 +76,7 @@ export default function ComponentDetail() {
         </div>
         <div className="header-actions">
           <button className="btn btn-ghost" onClick={copyImport}>
-            复制导入语句
+            {copied ? "已复制" : "复制导入语句"}
           </button>
           <button
             className="btn btn-ghost"
