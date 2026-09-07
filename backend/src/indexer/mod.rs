@@ -13,6 +13,7 @@ fn resolve_sync(db: &Database, config: &Config) -> SyncSettings {
         parse_concurrency: config.parse_concurrency,
         ingest_batch_size: config.ingest_batch_size,
         download_concurrency: config.download_concurrency,
+        fetch_max_attempts: config.fetch_max_attempts,
     })
 }
 
@@ -227,11 +228,16 @@ pub async fn fetch_and_ingest(
 
     db.update_library_status(library_id, "syncing", None)?;
     db.update_sync_task(task_id, 5, "Analyzing request...", None)?;
+    let sync = resolve_sync(db, config);
+    let max_attempts = sync.fetch_max_attempts.clamp(1, 12);
 
+    let mut failure_ctx: Option<String> = None;
+
+    // Direct whole-repo from URL in prompt (no LLM required). On failure, fall through to AI replan if LLM is on.
     if let Some((repo_url, branch, whole)) = ai::detect_repo_intent(prompt) {
         if whole {
             let llm = db.get_llm_settings(config).ok();
-            return ingest_whole_repo(
+            match ingest_whole_repo(
                 db,
                 config,
                 task_id,
@@ -243,7 +249,21 @@ pub async fn fetch_and_ingest(
                 auto_name,
                 llm.as_ref(),
             )
-            .await;
+            .await
+            {
+                Ok(n) => return Ok(n),
+                Err(e) => {
+                    let msg = e.to_string();
+                    if llm.as_ref().is_some_and(|s| s.enabled()) {
+                        tracing::warn!("whole-repo clone failed, will ask AI for other links: {msg}");
+                        failure_ctx = Some(format!(
+                            "克隆仓库失败 ({repo_url}@{branch}): {msg}\n请改为 mode=urls，给出其他可直连的组件文件地址（不要重复失败仓库的同一路径）。"
+                        ));
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
         }
     }
 
@@ -252,88 +272,149 @@ pub async fn fetch_and_ingest(
         anyhow::bail!("AI fetch requires LLM API key (configure in admin settings)");
     }
 
-    db.update_sync_task(task_id, 8, "AI planning component files...", None)?;
-    let plan = ai::plan_fetch_urls(&llm, prompt).await?;
-    if let Some(note) = &plan.note {
-        let _ = db.log("info", &format!("AI fetch plan: {note}"), Some(library_id));
-    }
+    let mut last_error = String::new();
 
-    let mut resolved_name = library_name.to_string();
-    if auto_name {
-        if let Some(n) = plan
-            .library_name
-            .as_ref()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
+    for attempt in 1..=max_attempts {
+        db.update_sync_task(
+            task_id,
+            8 + attempt as i32,
+            &format!("AI 查找下载链接（第 {attempt}/{max_attempts} 次）..."),
+            None,
+        )?;
+
+        let plan = match ai::plan_fetch_urls_with_context(&llm, prompt, failure_ctx.as_deref()).await
         {
-            let _ = db.update_library_name(library_id, n);
-            resolved_name = n.to_string();
-            let _ = db.log("info", &format!("Library auto-named: {n}"), Some(library_id));
+            Ok(p) => p,
+            Err(e) => {
+                last_error = e.to_string();
+                failure_ctx = Some(format!("AI planning failed: {last_error}"));
+                tracing::warn!("AI plan attempt {attempt}/{max_attempts} failed: {last_error}");
+                continue;
+            }
+        };
+
+        if let Some(note) = &plan.note {
+            let _ = db.log(
+                "info",
+                &format!("AI fetch plan [{attempt}/{max_attempts}]: {note}"),
+                Some(library_id),
+            );
+        }
+
+        let mut resolved_name = library_name.to_string();
+        if auto_name {
+            if let Some(n) = plan
+                .library_name
+                .as_ref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
+                let _ = db.update_library_name(library_id, n);
+                resolved_name = n.to_string();
+                let _ = db.log("info", &format!("Library auto-named: {n}"), Some(library_id));
+            }
+        }
+
+        if plan.mode == "repo" || plan.whole_repo {
+            let repo_url = plan
+                .repo_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let Some(repo_url) = repo_url else {
+                last_error = "AI requested repo mode but repo_url is empty".into();
+                failure_ctx = Some(last_error.clone());
+                continue;
+            };
+            let branch = plan
+                .branch
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("main");
+            match ingest_whole_repo(
+                db,
+                config,
+                task_id,
+                library_id,
+                local_path,
+                &resolved_name,
+                repo_url,
+                branch,
+                false,
+                Some(&llm),
+            )
+            .await
+            {
+                Ok(n) => return Ok(n),
+                Err(e) => {
+                    last_error = e.to_string();
+                    failure_ctx = Some(format!(
+                        "repo clone failed ({repo_url}@{branch}): {last_error}\n请改用 mode=urls，提供其他可直连文件地址，不要重复同一仓库克隆。"
+                    ));
+                    tracing::warn!(
+                        "whole-repo attempt {attempt}/{max_attempts} failed: {last_error}"
+                    );
+                    continue;
+                }
+            }
+        }
+
+        if plan.urls.is_empty() {
+            last_error = "AI returned empty urls".into();
+            failure_ctx = Some(last_error.clone());
+            continue;
+        }
+
+        let _ = db.log(
+            "info",
+            &format!(
+                "AI fetch urls [{attempt}/{max_attempts}] ({}): {}",
+                plan.urls.len(),
+                plan.urls.join(" , ")
+            ),
+            Some(library_id),
+        );
+
+        db.update_sync_task(
+            task_id,
+            20,
+            &format!(
+                "第 {attempt}/{max_attempts} 次：下载 {} 个文件…",
+                plan.urls.len()
+            ),
+            None,
+        )?;
+        std::fs::create_dir_all(local_path)?;
+
+        match fetcher::download_urls(&plan.urls, local_path, sync.download_concurrency).await {
+            Ok(written) => {
+                db.update_sync_task(task_id, 40, "Download complete, parsing...", None)?;
+                return ingest_files(
+                    db,
+                    Some(config),
+                    task_id,
+                    library_id,
+                    local_path,
+                    &resolved_name,
+                    &written,
+                    true,
+                    false,
+                )
+                .await;
+            }
+            Err(e) => {
+                last_error = e.to_string();
+                let tried = plan.urls.join("\n");
+                failure_ctx = Some(format!(
+                    "下载失败（每个链接只试一次，不会自动换镜像）:\n{last_error}\n\n已失败的 URL:\n{tried}\n\n请另找其他可用直链（可换站点/路径/包源），禁止重复上述地址。"
+                ));
+                tracing::warn!("download attempt {attempt}/{max_attempts} failed: {last_error}");
+            }
         }
     }
 
-    if plan.mode == "repo" || plan.whole_repo {
-        let repo_url = plan
-            .repo_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("AI requested repo mode but repo_url is empty"))?;
-        let branch = plan
-            .branch
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("main");
-        return ingest_whole_repo(
-            db,
-            config,
-            task_id,
-            library_id,
-            local_path,
-            &resolved_name,
-            repo_url,
-            branch,
-            false,
-            Some(&llm),
-        )
-        .await;
-    }
-
-    let _ = db.log(
-        "info",
-        &format!(
-            "AI fetch urls ({}): {}",
-            plan.urls.len(),
-            plan.urls.join(" , ")
-        ),
-        Some(library_id),
-    );
-
-    db.update_sync_task(
-        task_id,
-        20,
-        &format!("AI selected {} file(s), downloading...", plan.urls.len()),
-        None,
-    )?;
-    std::fs::create_dir_all(local_path)?;
-    let sync = resolve_sync(db, config);
-    let written =
-        fetcher::download_urls(&plan.urls, local_path, sync.download_concurrency).await?;
-
-    db.update_sync_task(task_id, 40, "Download complete, parsing...", None)?;
-    ingest_files(
-        db,
-        Some(config),
-        task_id,
-        library_id,
-        local_path,
-        &resolved_name,
-        &written,
-        true,
-        false,
-    )
-    .await
+    anyhow::bail!("AI fetch failed after {max_attempts} attempt(s): {last_error}")
 }
 
 async fn ingest_whole_repo(
@@ -611,6 +692,108 @@ pub fn write_upload_file(root: &Path, relative: &str, bytes: &[u8]) -> anyhow::R
     }
     std::fs::write(&dest, bytes)?;
     Ok(dest)
+}
+
+/// Extract a ZIP into `uploads/<stem>/` and return relative paths of component files.
+pub fn extract_zip_upload(root: &Path, archive_name: &str, bytes: &[u8]) -> anyhow::Result<Vec<String>> {
+    use std::io::{Cursor, Read};
+
+    let stem = Path::new(archive_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("archive");
+    let stem = sanitize_archive_stem(stem);
+    let base = format!("uploads/{stem}");
+
+    let cursor = Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|e| anyhow::anyhow!("invalid zip archive: {e}"))?;
+
+    let mut component_paths = Vec::new();
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| anyhow::anyhow!("zip entry {i}: {e}"))?;
+        if file.is_dir() {
+            continue;
+        }
+        let Some(enclosed) = file.enclosed_name() else {
+            continue;
+        };
+        let inner = enclosed.to_string_lossy().replace('\\', "/");
+        if should_skip_zip_entry(&inner) {
+            continue;
+        }
+        let rel = format!("{base}/{inner}");
+        let safe = sanitize_relative_path(&rel)?;
+        let dest = root.join(&safe);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        std::fs::write(&dest, &buf)?;
+
+        let ext = Path::new(&inner)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        if crate::parser::is_component_extension(ext) {
+            component_paths.push(safe);
+        }
+    }
+
+    if component_paths.is_empty() {
+        anyhow::bail!("zip 中未找到可解析的组件文件（.vue/.uvue/.tsx/.jsx/.ts/.js）");
+    }
+    Ok(component_paths)
+}
+
+pub fn is_zip_filename(name: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("zip"))
+        .unwrap_or(false)
+}
+
+fn sanitize_archive_stem(stem: &str) -> String {
+    let cleaned: String = stem
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        "archive".into()
+    } else {
+        cleaned
+    }
+}
+
+fn should_skip_zip_entry(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    if lower.contains("node_modules/")
+        || lower.contains("/.git/")
+        || lower.starts_with(".git/")
+        || lower.contains("__macosx/")
+        || lower.ends_with(".ds_store")
+    {
+        return true;
+    }
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    const KEEP: &[&str] = &[
+        "vue", "uvue", "tsx", "jsx", "ts", "js", "md", "css", "scss", "less", "json",
+    ];
+    !KEEP.contains(&ext.as_str())
 }
 
 fn sanitize_relative_path(relative: &str) -> anyhow::Result<String> {

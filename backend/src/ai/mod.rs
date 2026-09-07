@@ -169,6 +169,15 @@ pub async fn suggest_library_name(
 
 /// Given a natural-language request, ask the model for raw component file URLs to download.
 pub async fn plan_fetch_urls(llm: &LlmSettings, prompt: &str) -> anyhow::Result<AiFetchPlan> {
+    plan_fetch_urls_with_context(llm, prompt, None).await
+}
+
+/// Re-plan after previous links failed; `failure_context` lists what was tried.
+pub async fn plan_fetch_urls_with_context(
+    llm: &LlmSettings,
+    prompt: &str,
+    failure_context: Option<&str>,
+) -> anyhow::Result<AiFetchPlan> {
     let api_key = llm
         .api_key
         .as_deref()
@@ -176,19 +185,27 @@ pub async fn plan_fetch_urls(llm: &LlmSettings, prompt: &str) -> anyhow::Result<
         .ok_or_else(|| anyhow::anyhow!("LLM API key not configured (admin settings)"))?;
 
     let system = r#"你是组件获取助手。用户用自然语言或仓库地址描述要获取的前端组件。
+服务端不会自动换镜像或改分支：每个 URL 只尝试一次。下载失败后会把失败信息给你，由你另找可用直链。
 输出严格 JSON（不要 markdown）：
-{"mode":"urls","urls":["https://raw.githubusercontent.com/.../Button.vue"],"note":"说明","library_name":"Element Plus Button"}
+{"mode":"urls","urls":["https://cdn.jsdelivr.net/gh/owner/repo@dev/path/Button.vue"],"note":"说明","library_name":"Element Plus Button"}
 或整库导入：
 {"mode":"repo","repo_url":"https://github.com/owner/repo.git","branch":"dev","whole_repo":true,"note":"整库导入","library_name":"Element Plus"}
 
 规则：
 1. 若用户只给了 GitHub/GitLab/Gitee 仓库地址、未指定具体组件名，或明确说「全部/所有组件/整库」，必须 mode=repo 且 whole_repo=true
-2. 若指定了具体组件（如 Button、Tag），mode=urls，给出可直接 GET 的 raw 文件地址（raw.githubusercontent.com / jsdelivr / unpkg）
+2. 若指定了具体组件（如 Button、Tag），mode=urls，给出可直接 GET 的文件地址（raw.githubusercontent.com / jsDelivr / unpkg / GitLab·Gitee raw）
 3. urls 只含 .vue/.uvue/.tsx/.jsx/.ts/.js 及可选 README.md；不要 HTML/blob 页；最多 30 个
-4. Element Plus 分支用 dev（不是 main）；不确定时可用 jsDelivr
-5. library_name 必填：8～24 字"#;
+4. Element Plus 分支用 dev（不是 main）
+5. 若提供了「上次失败信息」：必须给出与失败列表不同的新链接（可换站点、换路径、换包源），禁止原样重复；不要只把同一 GitHub 路径改成镜像域名糊弄
+6. library_name 必填：8～24 字"#;
 
-    let user = format!("用户需求:\n{prompt}");
+    let user = if let Some(ctx) = failure_context.filter(|s| !s.trim().is_empty()) {
+        format!(
+            "用户需求:\n{prompt}\n\n上次失败信息（请另找其他可用直链，不要重复失败地址）:\n{ctx}"
+        )
+    } else {
+        format!("用户需求:\n{prompt}")
+    };
     let content = chat_completion(llm, api_key, system, &user).await?;
     parse_fetch_plan(&content)
 }

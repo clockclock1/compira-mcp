@@ -37,6 +37,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 walkdir = "2.5"
 sysinfo = "0.33"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
 
 [profile.release]
 lto = true

@@ -16,6 +16,7 @@ interface SyncSettings {
   parse_concurrency: number;
   ingest_batch_size: number;
   download_concurrency: number;
+  fetch_max_attempts: number;
 }
 
 interface AuthSettings {
@@ -49,6 +50,7 @@ export default function Settings() {
   const [parseConc, setParseConc] = useState("0");
   const [batchSize, setBatchSize] = useState("50");
   const [downloadConc, setDownloadConc] = useState("4");
+  const [fetchAttempts, setFetchAttempts] = useState("4");
   const [sessionTtl, setSessionTtl] = useState("8");
   const [rememberTtl, setRememberTtl] = useState("168");
   const [sliding, setSliding] = useState(true);
@@ -76,6 +78,7 @@ export default function Settings() {
         setParseConc(String(syncCfg.parse_concurrency));
         setBatchSize(String(syncCfg.ingest_batch_size));
         setDownloadConc(String(syncCfg.download_concurrency));
+        setFetchAttempts(String(syncCfg.fetch_max_attempts ?? 4));
         setAuthCfg(a);
         setSessionTtl(String(a.session_ttl_hours));
         setRememberTtl(String(a.remember_me_ttl_hours));
@@ -188,12 +191,14 @@ export default function Settings() {
         parse_concurrency: Math.max(0, Number(parseConc) || 0),
         ingest_batch_size: Math.max(1, Number(batchSize) || 50),
         download_concurrency: Math.max(1, Number(downloadConc) || 4),
+        fetch_max_attempts: Math.min(12, Math.max(1, Number(fetchAttempts) || 4)),
       });
       setSync(updated);
       setMaxJobs(String(updated.max_jobs));
       setParseConc(String(updated.parse_concurrency));
       setBatchSize(String(updated.ingest_batch_size));
       setDownloadConc(String(updated.download_concurrency));
+      setFetchAttempts(String(updated.fetch_max_attempts));
       setOk("同步并发已保存，立即生效（进行中的任务不受影响）");
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存失败");
@@ -224,7 +229,7 @@ export default function Settings() {
       <div className="page-header">
         <div>
           <h1>系统设置</h1>
-          <div className="page-sub">账号密码 · 登录时效 · 存储维护 · 同步并发 · LLM</div>
+          <div className="page-sub">账号密码 · 登录时效 · 存储维护 · 同步拉取 · LLM</div>
         </div>
         <div className="settings-header-meta">
           {user && <span className="chip-file">{user.username}</span>}
@@ -417,14 +422,14 @@ export default function Settings() {
           <section className="card settings-card">
             <div className="card-header">
               <div>
-                <div className="card-title">同步并发</div>
+                <div className="card-title">同步与拉取</div>
                 <div className="settings-card-desc">
-                  控制同时跑几个库、解析与下载强度
+                  控制同步并行度，以及 AI 拉取换源重试次数
                 </div>
               </div>
               {sync && (
                 <span className="chip-file">
-                  并行 {sync.max_jobs} · 解析 {sync.parse_concurrency || "自动"}
+                  并行 {sync.max_jobs} · 拉取尝试 {sync.fetch_max_attempts ?? 4}
                 </span>
               )}
             </div>
@@ -498,6 +503,25 @@ export default function Settings() {
                     required
                   />
                   <p className="hint-text">AI 拉取时并行下载数</p>
+                </div>
+                <div className="settings-field">
+                  <label htmlFor="sync-fetch-attempts">
+                    AI 拉取最大尝试次数
+                    <span className="settings-key">fetch_attempts</span>
+                  </label>
+                  <input
+                    id="sync-fetch-attempts"
+                    className="modal-input"
+                    type="number"
+                    min={1}
+                    max={12}
+                    value={fetchAttempts}
+                    onChange={(e) => setFetchAttempts(e.target.value)}
+                    required
+                  />
+                  <p className="hint-text">
+                    下载失败后让 AI 另找链接的次数，1–12（不自动换镜像）
+                  </p>
                 </div>
               </div>
               <div className="settings-actions">

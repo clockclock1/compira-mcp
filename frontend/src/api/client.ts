@@ -268,18 +268,21 @@ export const api = {
         parse_concurrency: number;
         ingest_batch_size: number;
         download_concurrency: number;
+        fetch_max_attempts: number;
       }>("/settings/sync"),
     updateSync: (data: {
       max_jobs?: number;
       parse_concurrency?: number;
       ingest_batch_size?: number;
       download_concurrency?: number;
+      fetch_max_attempts?: number;
     }) =>
       request<{
         max_jobs: number;
         parse_concurrency: number;
         ingest_batch_size: number;
         download_concurrency: number;
+        fetch_max_attempts: number;
       }>("/settings/sync", { method: "PUT", body: JSON.stringify(data) }),
     auth: () =>
       request<{

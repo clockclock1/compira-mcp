@@ -4,52 +4,9 @@ use std::time::Duration;
 
 use tokio::sync::Semaphore;
 
-/// Download a remote file into the library directory.
+/// Download a remote file into the library directory (single URL, no mirror rewriting).
 /// Returns the relative path (posix-style) written under `root`.
 pub async fn download_url(url: &str, root: &Path) -> anyhow::Result<String> {
-    let url = normalize_component_url(url);
-    if !is_allowed_component_url(&url) {
-        anyhow::bail!("url not allowed (need raw .vue/.ts/.js etc.): {url}");
-    }
-
-    let client = reqwest::Client::builder()
-        .user_agent("CompiraMCP/0.1 (+https://github.com/clockclock1/compira-mcp)")
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .timeout(Duration::from_secs(60))
-        .build()?;
-
-    let resp = client
-        .get(&url)
-        .header(reqwest::header::ACCEPT, "*/*")
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("request error for {url}: {e}"))?;
-
-    let status = resp.status();
-    if status.as_u16() == 404 {
-        for alt in alternate_github_ref_urls(&url) {
-            tracing::info!("404 on {url}, retrying {alt}");
-            match Box::pin(download_url_once(&alt, root)).await {
-                Ok(rel) => return Ok(rel),
-                Err(e) => tracing::warn!("retry failed {alt}: {e}"),
-            }
-        }
-    }
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        let snippet: String = body.chars().take(120).collect();
-        anyhow::bail!("download failed {status} {url}: {snippet}");
-    }
-
-    let bytes = resp.bytes().await?;
-    if bytes.is_empty() {
-        anyhow::bail!("empty body: {url}");
-    }
-
-    write_download(root, &url, &bytes)
-}
-
-async fn download_url_once(url: &str, root: &Path) -> anyhow::Result<String> {
     let url = normalize_component_url(url);
     if !is_allowed_component_url(&url) {
         anyhow::bail!("url not allowed (need raw .vue/.ts/.js etc.): {url}");
@@ -143,14 +100,14 @@ pub async fn download_urls(
     Ok(written)
 }
 
-/// Convert github.com/.../blob/... to raw.githubusercontent.com/...
+/// Convert github / gitlab / gitee blob pages to raw file URLs (same file, not a mirror).
 pub fn normalize_component_url(url: &str) -> String {
     let url = url.trim();
+
     if let Some(rest) = url
         .strip_prefix("https://github.com/")
         .or_else(|| url.strip_prefix("http://github.com/"))
     {
-        // owner/repo/blob/ref/path
         let parts: Vec<&str> = rest.splitn(5, '/').collect();
         if parts.len() == 5 && parts[2] == "blob" {
             return format!(
@@ -159,42 +116,40 @@ pub fn normalize_component_url(url: &str) -> String {
             );
         }
     }
+
+    if let Some(rest) = url
+        .strip_prefix("https://gitlab.com/")
+        .or_else(|| url.strip_prefix("http://gitlab.com/"))
+    {
+        if let Some((owner_repo, after)) = rest.split_once("/-/blob/") {
+            if let Some((git_ref, path)) = after.split_once('/') {
+                return format!("https://gitlab.com/{owner_repo}/-/raw/{git_ref}/{path}");
+            }
+        }
+    }
+
+    if let Some(rest) = url
+        .strip_prefix("https://gitee.com/")
+        .or_else(|| url.strip_prefix("http://gitee.com/"))
+    {
+        let parts: Vec<&str> = rest.splitn(5, '/').collect();
+        if parts.len() == 5 && parts[2] == "blob" {
+            return format!(
+                "https://gitee.com/{}/{}/raw/{}/{}",
+                parts[0], parts[1], parts[3], parts[4]
+            );
+        }
+    }
+
     url.to_string()
 }
 
-/// If a raw.githubusercontent.com URL 404s on a common wrong default branch, try alternates.
-fn alternate_github_ref_urls(url: &str) -> Vec<String> {
-    const MARKER: &str = "raw.githubusercontent.com/";
-    let Some(idx) = url.find(MARKER) else {
-        return Vec::new();
-    };
-    let rest = &url[idx + MARKER.len()..];
-    let mut parts = rest.splitn(4, '/');
-    let (Some(owner), Some(repo), Some(git_ref), Some(path)) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
-    else {
-        return Vec::new();
-    };
-
-    let alts: &[&str] = match git_ref {
-        "main" => &["dev", "master", "next"],
-        "master" => &["main", "dev"],
-        "dev" => &["main", "master"],
-        _ => return Vec::new(),
-    };
-    alts.iter()
-        .map(|r| format!("https://raw.githubusercontent.com/{owner}/{repo}/{r}/{path}"))
-        .collect()
-}
-
 fn relative_path_from_url(url: &str) -> PathBuf {
-    // Prefer last path segments that look like a component path
     let without_query = url.split('?').next().unwrap_or(url);
     let path = without_query
         .trim_start_matches("https://")
         .trim_start_matches("http://");
 
-    // raw.githubusercontent.com/{owner}/{repo}/{ref}/path...
     if let Some(rest) = path.strip_prefix("raw.githubusercontent.com/") {
         let parts: Vec<&str> = rest.split('/').collect();
         if parts.len() >= 4 {
@@ -202,12 +157,26 @@ fn relative_path_from_url(url: &str) -> PathBuf {
         }
     }
 
-    // cdn.jsdelivr.net/gh/owner/repo@version/path
-    if let Some(rest) = path.strip_prefix("cdn.jsdelivr.net/gh/") {
+    for prefix in ["cdn.jsdelivr.net/gh/", "fastly.jsdelivr.net/gh/"] {
+        if let Some(rest) = path.strip_prefix(prefix) {
+            let parts: Vec<&str> = rest.split('/').collect();
+            if parts.len() >= 3 {
+                return PathBuf::from(parts[2..].join("/"));
+            }
+        }
+    }
+
+    if let Some(idx) = path.find("/-/raw/") {
+        let after = &path[idx + "/-/raw/".len()..];
+        if let Some((_, file_path)) = after.split_once('/') {
+            return PathBuf::from(file_path);
+        }
+    }
+
+    if let Some(rest) = path.strip_prefix("gitee.com/") {
         let parts: Vec<&str> = rest.split('/').collect();
-        if parts.len() >= 2 {
-            // parts[0]=owner, parts[1]=repo@version, rest=path
-            return PathBuf::from(parts[2..].join("/"));
+        if parts.len() >= 5 && parts[2] == "raw" {
+            return PathBuf::from(parts[4..].join("/"));
         }
     }
 
@@ -226,6 +195,8 @@ pub fn is_allowed_component_url(url: &str) -> bool {
     let host_ok = lower.contains("raw.githubusercontent.com")
         || lower.contains("jsdelivr.net")
         || lower.contains("unpkg.com")
-        || lower.contains("github.com/");
+        || lower.contains("github.com/")
+        || lower.contains("gitlab.com/")
+        || lower.contains("gitee.com/");
     has_ext && host_ok
 }

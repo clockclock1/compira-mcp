@@ -20,6 +20,8 @@ pub struct Config {
     pub ingest_batch_size: usize,
     /// Max parallel HTTP downloads during AI fetch.
     pub download_concurrency: usize,
+    /// Max source/mirror attempts for AI fetch (per URL + replan rounds).
+    pub fetch_max_attempts: usize,
     /// Rayon threads used when parsing component files.
     pub parse_concurrency: usize,
     /// Default session TTL in hours (non–remember-me).
@@ -63,6 +65,7 @@ impl Config {
             max_jobs: env_usize("COMPIRA_MAX_JOBS", 3).clamp(1, 64),
             ingest_batch_size: env_usize("COMPIRA_INGEST_BATCH_SIZE", 250).clamp(20, 5000),
             download_concurrency: env_usize("COMPIRA_DOWNLOAD_CONCURRENCY", 8).clamp(1, 64),
+            fetch_max_attempts: env_usize("COMPIRA_FETCH_MAX_ATTEMPTS", 4).clamp(1, 12),
             parse_concurrency: env_usize("COMPIRA_PARSE_CONCURRENCY", 0), // 0 = num_cpus
             session_ttl_hours: env_u64("COMPIRA_SESSION_TTL_HOURS", 8).clamp(1, 24 * 90),
             remember_me_ttl_hours: env_u64("COMPIRA_REMEMBER_TTL_HOURS", 168).clamp(1, 24 * 365),

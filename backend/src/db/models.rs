@@ -169,6 +169,8 @@ pub struct SyncSettings {
     pub ingest_batch_size: usize,
     /// Parallel HTTP downloads for AI fetch.
     pub download_concurrency: usize,
+    /// Max mirror/source attempts for AI fetch (per file + plan retries).
+    pub fetch_max_attempts: usize,
 }
 
 /// Login session policy (admin configurable).

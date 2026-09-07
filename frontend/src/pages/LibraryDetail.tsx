@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router-dom";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, Component, Library } from "../api/client";
 import AlertBanner from "../components/AlertBanner";
+import Modal from "../components/Modal";
 
 export default function LibraryDetail() {
   const { id } = useParams<{ id: string }>();
@@ -363,8 +364,7 @@ export default function LibraryDetail() {
         )}
       </div>
 
-      <div className={`modal-backdrop${showUpload ? " open" : ""}`} onClick={() => setShowUpload(false)}>
-        <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <Modal open={showUpload} onClose={() => setShowUpload(false)}>
           <div className="modal-header">
             <div className="modal-title">上传组件</div>
             <div className="modal-sub">上传后本地解析，可选 AI 补全文档 / 示例 / Props 说明</div>
@@ -372,15 +372,18 @@ export default function LibraryDetail() {
           <form onSubmit={handleUpload}>
             <div className="modal-body">
               <div className="modal-field">
-                <label>选择文件</label>
+                <label>选择文件或压缩包（.zip）</label>
                 <input
                   className="modal-input"
                   type="file"
                   multiple
                   required
-                  accept=".vue,.uvue,.tsx,.jsx,.ts,.js,.md"
+                  accept=".vue,.uvue,.tsx,.jsx,.ts,.js,.md,.zip,application/zip"
                   onChange={(e) => setFiles(e.target.files)}
                 />
+                <div className="hint-text" style={{ marginTop: 6 }}>
+                  支持多选源码，或上传 .zip 整包自动解压入库
+                </div>
               </div>
               <label className="modal-check">
                 <input type="checkbox" checked={useAi} onChange={(e) => setUseAi(e.target.checked)} />
@@ -396,11 +399,9 @@ export default function LibraryDetail() {
               </button>
             </div>
           </form>
-        </div>
-      </div>
+      </Modal>
 
-      <div className={`modal-backdrop${showFetch ? " open" : ""}`} onClick={() => setShowFetch(false)}>
-        <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 520 }}>
+      <Modal open={showFetch} onClose={() => setShowFetch(false)} width={520}>
           <div className="modal-header">
             <div className="modal-title">AI 拉取 / 整库导入</div>
             <div className="modal-sub">
@@ -433,8 +434,7 @@ export default function LibraryDetail() {
               </button>
             </div>
           </form>
-        </div>
-      </div>
+      </Modal>
     </div>
   );
 }

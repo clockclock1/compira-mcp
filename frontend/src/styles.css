@@ -573,7 +573,7 @@ a{color:var(--primary-light);text-decoration:none;}
   box-shadow:var(--shadow-card);overflow:hidden;
 }
 .modal-backdrop{
-  position:fixed;inset:0;background:rgba(0,0,0,0.55);display:none;align-items:center;justify-content:center;z-index:100;
+  position:fixed;inset:0;background:rgba(0,0,0,0.55);display:none;align-items:center;justify-content:center;z-index:2000;
   backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
 }
 .modal-backdrop.open{display:flex;}

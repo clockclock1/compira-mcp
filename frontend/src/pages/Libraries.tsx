@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, Library, SyncTask } from "../api/client";
 import AlertBanner from "../components/AlertBanner";
 import EmptyState from "../components/EmptyState";
+import Modal from "../components/Modal";
 import { PageMotion, ShineButton } from "../components/motion";
 
 type Filter = "all" | "synced" | "syncing" | "failed";
@@ -502,8 +503,7 @@ export default function Libraries() {
         )}
       </div>
 
-      <div className={`modal-backdrop${showModal ? " open" : ""}`} onClick={() => setShowModal(false)}>
-        <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 520 }}>
+      <Modal open={showModal} onClose={() => setShowModal(false)} width={520}>
           <div className="modal-header">
             <div className="modal-title">添加组件库</div>
             <div className="modal-sub">选择 Git 同步、上传文件，或用自然语言让 AI 拉取组件</div>
@@ -567,16 +567,16 @@ export default function Libraries() {
 
               {mode === "upload" && (
                 <div className="modal-field">
-                  <label>组件文件（.vue / .uvue / .tsx / .jsx）</label>
+                  <label>组件文件或压缩包（.zip）</label>
                   <input
                     className="modal-input"
                     type="file"
                     multiple
-                    accept=".vue,.uvue,.tsx,.jsx,.ts,.js,.md"
+                    accept=".vue,.uvue,.tsx,.jsx,.ts,.js,.md,.zip,application/zip"
                     onChange={(e) => setFiles(e.target.files)}
                   />
                   <div className="hint-text" style={{ marginTop: 6 }}>
-                    可多选；入库后会解析 Props/Events，并可选用 AI 补全文档与示例。名称留空时由 AI
+                    可多选源码文件，或上传 .zip 整包；入库后解析 Props/Events，并可选用 AI 补全。名称留空时由 AI
                     根据组件自动命名
                   </div>
                 </div>
@@ -626,8 +626,7 @@ export default function Libraries() {
               </button>
             </div>
           </form>
-        </div>
-      </div>
+      </Modal>
     </PageMotion>
   );
 }

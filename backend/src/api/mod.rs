@@ -286,6 +286,7 @@ struct UpdateSyncSettingsReq {
     pub parse_concurrency: Option<usize>,
     pub ingest_batch_size: Option<usize>,
     pub download_concurrency: Option<usize>,
+    pub fetch_max_attempts: Option<usize>,
 }
 
 async fn update_sync_settings(
@@ -301,6 +302,7 @@ async fn update_sync_settings(
         req.parse_concurrency,
         req.ingest_batch_size,
         req.download_concurrency,
+        req.fetch_max_attempts,
     ) {
         return err_response(e);
     }
@@ -310,8 +312,8 @@ async fn update_sync_settings(
             let _ = state.db.log(
                 "info",
                 &format!(
-                    "Admin updated sync settings: max_jobs={}, parse={}, batch={}, download={}",
-                    s.max_jobs, s.parse_concurrency, s.ingest_batch_size, s.download_concurrency
+                    "Admin updated sync settings: max_jobs={}, parse={}, batch={}, download={}, fetch_attempts={}",
+                    s.max_jobs, s.parse_concurrency, s.ingest_batch_size, s.download_concurrency, s.fetch_max_attempts
                 ),
                 None,
             );
@@ -613,6 +615,15 @@ async fn upload_components(
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("component.vue");
+
+        if crate::indexer::is_zip_filename(safe_name) {
+            match crate::indexer::extract_zip_upload(&root, safe_name, &bytes) {
+                Ok(paths) => relative_paths.extend(paths),
+                Err(e) => return err_response(e),
+            }
+            continue;
+        }
+
         let rel = format!("uploads/{safe_name}");
         if let Err(e) = crate::indexer::write_upload_file(&root, &rel, &bytes) {
             return err_response(e);

@@ -1373,6 +1373,11 @@ impl Database {
                 defaults.download_concurrency,
             )
             .clamp(1, 64),
+            fetch_max_attempts: Self::parse_setting_usize(
+                self.get_setting("sync_fetch_max_attempts")?,
+                defaults.fetch_max_attempts,
+            )
+            .clamp(1, 12),
         })
     }
 
@@ -1382,6 +1387,7 @@ impl Database {
         parse_concurrency: Option<usize>,
         ingest_batch_size: Option<usize>,
         download_concurrency: Option<usize>,
+        fetch_max_attempts: Option<usize>,
     ) -> anyhow::Result<crate::db::SyncSettings> {
         if let Some(v) = max_jobs {
             self.set_setting("sync_max_jobs", &v.clamp(1, 64).to_string())?;
@@ -1394,6 +1400,9 @@ impl Database {
         }
         if let Some(v) = download_concurrency {
             self.set_setting("sync_download_concurrency", &v.clamp(1, 64).to_string())?;
+        }
+        if let Some(v) = fetch_max_attempts {
+            self.set_setting("sync_fetch_max_attempts", &v.clamp(1, 12).to_string())?;
         }
         // Caller must pass defaults via get after update — we need config.
         // Return by re-reading with a temporary read of stored values only.
@@ -1414,6 +1423,11 @@ impl Database {
                 8,
             )
             .clamp(1, 64),
+            fetch_max_attempts: Self::parse_setting_usize(
+                self.get_setting("sync_fetch_max_attempts")?,
+                4,
+            )
+            .clamp(1, 12),
         })
     }
 
@@ -1437,6 +1451,12 @@ impl Database {
             self.set_setting(
                 "sync_download_concurrency",
                 &defaults.download_concurrency.to_string(),
+            )?;
+        }
+        if self.get_setting("sync_fetch_max_attempts")?.is_none() {
+            self.set_setting(
+                "sync_fetch_max_attempts",
+                &defaults.fetch_max_attempts.to_string(),
             )?;
         }
         Ok(())
