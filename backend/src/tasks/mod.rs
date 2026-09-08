@@ -1,12 +1,18 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::{broadcast, Notify};
+use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::db::Database;
-use crate::indexer;
+use crate::indexer::{self, is_cancelled};
+
+pub fn library_local_path(repos_dir: &std::path::Path, library_id: &str) -> PathBuf {
+    repos_dir.join(library_id)
+}
 
 /// Limits concurrent library jobs; max can be changed at runtime from settings.
 struct DynamicLimiter {
@@ -63,6 +69,8 @@ pub struct TaskManager {
     config: Arc<Config>,
     tx: broadcast::Sender<String>,
     limiter: Arc<DynamicLimiter>,
+    /// Active cancel tokens keyed by library id.
+    cancels: Arc<Mutex<HashMap<String, CancellationToken>>>,
 }
 
 impl TaskManager {
@@ -78,6 +86,7 @@ impl TaskManager {
             limiter: Arc::new(DynamicLimiter::new(max_jobs)),
             config: Arc::new(config),
             tx,
+            cancels: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -99,14 +108,56 @@ impl TaskManager {
         self.limiter.active.load(Ordering::Relaxed)
     }
 
-    async fn run_job<F, Fut>(&self, task_id: String, library_id: String, work: F)
-    where
-        F: FnOnce() -> Fut + Send + 'static,
+    fn register_cancel(&self, library_id: &str) -> CancellationToken {
+        let mut map = self.cancels.lock().unwrap();
+        if let Some(prev) = map.remove(library_id) {
+            prev.cancel();
+        }
+        let token = CancellationToken::new();
+        map.insert(library_id.to_string(), token.clone());
+        token
+    }
+
+    /// Cancel pending/running jobs for a library. Already-indexed components are kept.
+    pub fn cancel_library(&self, library_id: &str) -> anyhow::Result<serde_json::Value> {
+        {
+            let mut map = self.cancels.lock().unwrap();
+            if let Some(token) = map.remove(library_id) {
+                token.cancel();
+            }
+        }
+        let marked = self.db.cancel_library_tasks(library_id)?;
+        let count = self.db.count_library_components(library_id).unwrap_or(0);
+        // Keep partial index visible as ready (or leave syncing→ready)
+        let _ = self
+            .db
+            .update_library_status(library_id, "ready", Some(count));
+        let _ = self.db.log(
+            "info",
+            &format!("Library job cancelled by user (kept {count} components)"),
+            Some(library_id),
+        );
+        Ok(serde_json::json!({
+            "cancelled": true,
+            "tasks_marked": marked,
+            "component_count": count,
+        }))
+    }
+
+    async fn run_job<F, Fut>(
+        &self,
+        task_id: String,
+        library_id: String,
+        cancel: CancellationToken,
+        work: F,
+    ) where
+        F: FnOnce(CancellationToken) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
     {
         let limiter = self.limiter.clone();
         let db = self.db.clone();
         let tx = self.tx.clone();
+        let cancels = self.cancels.clone();
         let _ = tx.send(task_id.clone());
 
         let _ = db.update_sync_task(
@@ -116,16 +167,54 @@ impl TaskManager {
             Some("pending"),
         );
 
-        limiter.acquire().await;
-        let _ = db.update_sync_task(&task_id, 1, "Queued job started...", Some("running"));
-        let result = work().await;
-        limiter.release();
+        if cancel.is_cancelled() {
+            let _ = db.update_sync_task(&task_id, 0, "Cancelled before start", Some("cancelled"));
+            Self::cleanup_token(&cancels, &library_id, &cancel);
+            return;
+        }
 
-        if let Err(e) = result {
-            let msg = format!("Job failed: {e}");
-            let _ = db.update_sync_task(&task_id, 0, &msg, Some("failed"));
-            let _ = db.set_library_error(&library_id, &msg);
-            let _ = db.log("error", &msg, Some(&library_id));
+        limiter.acquire().await;
+
+        if cancel.is_cancelled() {
+            limiter.release();
+            let _ = db.update_sync_task(&task_id, 0, "Cancelled while queued", Some("cancelled"));
+            let count = db.count_library_components(&library_id).unwrap_or(0);
+            let _ = db.update_library_status(&library_id, "ready", Some(count));
+            Self::cleanup_token(&cancels, &library_id, &cancel);
+            return;
+        }
+
+        let _ = db.update_sync_task(&task_id, 1, "Queued job started...", Some("running"));
+        let result = work(cancel.clone()).await;
+        limiter.release();
+        Self::cleanup_token(&cancels, &library_id, &cancel);
+
+        match result {
+            Ok(()) => {}
+            Err(e) if is_cancelled(&e) || cancel.is_cancelled() => {
+                let count = db.count_library_components(&library_id).unwrap_or(0);
+                let msg = format!("已中断，保留已入库 {count} 个组件");
+                let _ = db.update_sync_task(&task_id, 100, &msg, Some("cancelled"));
+                let _ = db.update_library_status(&library_id, "ready", Some(count));
+                let _ = db.log("info", &msg, Some(&library_id));
+            }
+            Err(e) => {
+                let msg = format!("Job failed: {e}");
+                let _ = db.update_sync_task(&task_id, 0, &msg, Some("failed"));
+                let _ = db.set_library_error(&library_id, &msg);
+                let _ = db.log("error", &msg, Some(&library_id));
+            }
+        }
+    }
+
+    fn cleanup_token(
+        cancels: &Mutex<HashMap<String, CancellationToken>>,
+        library_id: &str,
+        token: &CancellationToken,
+    ) {
+        let mut map = cancels.lock().unwrap();
+        if map.get(library_id).is_some_and(|t| t == token) {
+            map.remove(library_id);
         }
     }
 
@@ -138,6 +227,7 @@ impl TaskManager {
         let task = self.db.create_sync_task(&library_id)?;
         let task_id = task.id.clone();
         let return_task_id = task_id.clone();
+        let cancel = self.register_cancel(&library_id);
 
         let db = self.db.clone();
         let config = self.config.clone();
@@ -150,7 +240,7 @@ impl TaskManager {
         let this = self.clone();
 
         tokio::spawn(async move {
-            this.run_job(task_id.clone(), lib_id.clone(), move || async move {
+            this.run_job(task_id.clone(), lib_id.clone(), cancel, move |cancel| async move {
                 indexer::sync_or_reindex(
                     &db,
                     config.as_ref(),
@@ -161,6 +251,7 @@ impl TaskManager {
                     &branch,
                     &local_path,
                     &name,
+                    &cancel,
                 )
                 .await
                 .map(|_| ())
@@ -175,7 +266,6 @@ impl TaskManager {
         &self,
         library_id: String,
         relative_paths: Vec<String>,
-        use_ai: bool,
         auto_name: bool,
     ) -> anyhow::Result<String> {
         let library = self
@@ -186,6 +276,7 @@ impl TaskManager {
         let task = self.db.create_sync_task(&library_id)?;
         let task_id = task.id.clone();
         let return_task_id = task_id.clone();
+        let cancel = self.register_cancel(&library_id);
 
         let db = self.db.clone();
         let config = self.config.clone();
@@ -195,7 +286,7 @@ impl TaskManager {
         let this = self.clone();
 
         tokio::spawn(async move {
-            this.run_job(task_id.clone(), lib_id.clone(), move || async move {
+            this.run_job(task_id.clone(), lib_id.clone(), cancel, move |cancel| async move {
                 indexer::ingest_files(
                     &db,
                     Some(config.as_ref()),
@@ -204,8 +295,8 @@ impl TaskManager {
                     &local_path,
                     &name,
                     &relative_paths,
-                    use_ai,
                     auto_name,
+                    &cancel,
                 )
                 .await
                 .map(|_| ())
@@ -240,6 +331,7 @@ impl TaskManager {
         let task = self.db.create_sync_task(&library_id)?;
         let task_id = task.id.clone();
         let return_task_id = task_id.clone();
+        let cancel = self.register_cancel(&library_id);
 
         let db = self.db.clone();
         let config = self.config.clone();
@@ -249,7 +341,7 @@ impl TaskManager {
         let this = self.clone();
 
         tokio::spawn(async move {
-            this.run_job(task_id.clone(), lib_id.clone(), move || async move {
+            this.run_job(task_id.clone(), lib_id.clone(), cancel, move |cancel| async move {
                 indexer::fetch_and_ingest(
                     &db,
                     config.as_ref(),
@@ -259,6 +351,7 @@ impl TaskManager {
                     &name,
                     &prompt,
                     auto_name,
+                    &cancel,
                 )
                 .await
                 .map(|_| ())
@@ -268,8 +361,4 @@ impl TaskManager {
 
         Ok(return_task_id)
     }
-}
-
-pub fn library_local_path(repos_dir: &std::path::Path, library_id: &str) -> PathBuf {
-    repos_dir.join(library_id)
 }

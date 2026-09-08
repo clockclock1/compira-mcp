@@ -1,11 +1,23 @@
 use std::path::{Path, PathBuf};
 
-use crate::ai::{self, apply_enrichment};
+use tokio_util::sync::CancellationToken;
+
+use crate::ai;
 use crate::config::Config;
 use crate::db::{Database, LlmSettings, SyncSettings};
 use crate::fetcher;
 use crate::git;
 use crate::parser::{self, ParsedBundle};
+
+/// Marker error when a user cancels a sync / ingest / fetch job.
+#[derive(Debug, thiserror::Error)]
+#[error("sync cancelled by user")]
+pub struct CancelledError;
+
+pub fn is_cancelled(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<CancelledError>().is_some()
+        || err.to_string().contains("sync cancelled by user")
+}
 
 fn resolve_sync(db: &Database, config: &Config) -> SyncSettings {
     db.get_sync_settings(config).unwrap_or(SyncSettings {
@@ -17,6 +29,20 @@ fn resolve_sync(db: &Database, config: &Config) -> SyncSettings {
     })
 }
 
+fn ensure_not_cancelled(cancel: &CancellationToken) -> anyhow::Result<()> {
+    if cancel.is_cancelled() {
+        return Err(CancelledError.into());
+    }
+    Ok(())
+}
+
+/// Publish live component count while status stays `syncing`.
+fn publish_progress_count(db: &Database, library_id: &str) -> anyhow::Result<i64> {
+    let count = db.count_library_components(library_id)?;
+    db.update_library_status(library_id, "syncing", Some(count))?;
+    Ok(count)
+}
+
 pub async fn sync_library(
     db: &Database,
     config: &Config,
@@ -26,7 +52,9 @@ pub async fn sync_library(
     branch: &str,
     local_path: &Path,
     library_name: &str,
+    cancel: &CancellationToken,
 ) -> anyhow::Result<usize> {
+    ensure_not_cancelled(cancel)?;
     db.update_library_status(library_id, "syncing", None)?;
     db.update_sync_task(task_id, 5, "Cloning/pulling repository...", None)?;
 
@@ -35,9 +63,11 @@ pub async fn sync_library(
     let local_path_buf = local_path.to_path_buf();
     tokio::task::spawn_blocking(move || git::clone_or_pull(&repo_url, &branch, &local_path_buf))
         .await??;
+    ensure_not_cancelled(cancel)?;
 
     db.update_sync_task(task_id, 25, "Repository synced, scanning files...", None)?;
     db.clear_library_components(library_id)?;
+    let _ = publish_progress_count(db, library_id);
 
     ingest_directory_chunked(
         db,
@@ -47,7 +77,7 @@ pub async fn sync_library(
         local_path,
         library_name,
         true,
-        None,
+        cancel,
     )
     .await
 }
@@ -63,6 +93,7 @@ pub async fn sync_or_reindex(
     branch: &str,
     local_path: &Path,
     library_name: &str,
+    cancel: &CancellationToken,
 ) -> anyhow::Result<usize> {
     if source_type == "git" || source_type.is_empty() {
         return sync_library(
@@ -74,6 +105,7 @@ pub async fn sync_or_reindex(
             branch,
             local_path,
             library_name,
+            cancel,
         )
         .await;
     }
@@ -83,6 +115,7 @@ pub async fn sync_or_reindex(
         anyhow::bail!("本地目录不存在，请先上传或 AI 拉取组件");
     }
 
+    ensure_not_cancelled(cancel)?;
     db.update_library_status(library_id, "syncing", None)?;
     db.update_sync_task(
         task_id,
@@ -91,8 +124,8 @@ pub async fn sync_or_reindex(
         None,
     )?;
     db.clear_library_components(library_id)?;
+    let _ = publish_progress_count(db, library_id);
 
-    // upload may include .ts/.js; fetch/git-style trees prefer UI extensions
     let bulk = source_type != "upload";
     ingest_directory_chunked(
         db,
@@ -102,12 +135,12 @@ pub async fn sync_or_reindex(
         local_path,
         library_name,
         bulk,
-        None,
+        cancel,
     )
     .await
 }
 
-/// Incrementally ingest specific relative files (upload / fetch). Optionally AI-enrich.
+/// Incrementally ingest specific relative files (upload / fetch). Local parse only — no per-file AI enrich.
 pub async fn ingest_files(
     db: &Database,
     config: Option<&Config>,
@@ -116,9 +149,10 @@ pub async fn ingest_files(
     local_path: &Path,
     library_name: &str,
     relative_paths: &[String],
-    use_ai: bool,
     auto_name: bool,
+    cancel: &CancellationToken,
 ) -> anyhow::Result<usize> {
+    ensure_not_cancelled(cancel)?;
     db.update_library_status(library_id, "syncing", None)?;
     db.update_sync_task(
         task_id,
@@ -137,20 +171,16 @@ pub async fn ingest_files(
         parser::parse_paths_parallel(&library_id_owned, &root, &paths, parse_conc)
     })
     .await?;
+    ensure_not_cancelled(cancel)?;
 
     if parsed.is_empty() {
         anyhow::bail!("no valid component files to ingest");
     }
 
-    let llm = if use_ai || auto_name {
-        config.and_then(|c| db.get_llm_settings(c).ok())
-    } else {
-        None
-    };
-
     if auto_name {
         let names: Vec<String> = parsed.iter().map(|(c, _, _, _)| c.name.clone()).collect();
         let files: Vec<String> = relative_paths.to_vec();
+        let llm = config.and_then(|c| db.get_llm_settings(c).ok());
         let new_name = if let Some(settings) = llm.as_ref().filter(|s| s.enabled()) {
             db.update_sync_task(task_id, 15, "AI naming library...", None)?;
             match ai::suggest_library_name(settings, &names, &files).await {
@@ -163,6 +193,7 @@ pub async fn ingest_files(
         } else {
             fallback_library_name(&names, &files)
         };
+        ensure_not_cancelled(cancel)?;
         let _ = db.update_library_name(library_id, &new_name);
         let _ = db.log(
             "info",
@@ -171,7 +202,6 @@ pub async fn ingest_files(
         );
     }
 
-    let enrich_llm = if use_ai { llm } else { None };
     let display_name = if auto_name {
         db.get_library(library_id)?
             .map(|l| l.name)
@@ -189,8 +219,8 @@ pub async fn ingest_files(
         library_id,
         &display_name,
         parsed,
-        enrich_llm.as_ref(),
         batch_size,
+        cancel,
     )
     .await
 }
@@ -210,7 +240,7 @@ fn fallback_library_name(names: &[String], files: &[String]) -> String {
         .to_string()
 }
 
-/// Pure AI fetch: natural-language / repo URL → download or clone → parse (+ optional AI enrich).
+/// Pure AI fetch: natural-language / repo URL → download or clone → parse (no per-file AI enrich).
 pub async fn fetch_and_ingest(
     db: &Database,
     config: &Config,
@@ -220,12 +250,14 @@ pub async fn fetch_and_ingest(
     library_name: &str,
     prompt: &str,
     auto_name: bool,
+    cancel: &CancellationToken,
 ) -> anyhow::Result<usize> {
     let prompt = prompt.trim();
     if prompt.is_empty() {
         anyhow::bail!("prompt is required for AI fetch");
     }
 
+    ensure_not_cancelled(cancel)?;
     db.update_library_status(library_id, "syncing", None)?;
     db.update_sync_task(task_id, 5, "Analyzing request...", None)?;
     let sync = resolve_sync(db, config);
@@ -248,10 +280,12 @@ pub async fn fetch_and_ingest(
                 &branch,
                 auto_name,
                 llm.as_ref(),
+                cancel,
             )
             .await
             {
                 Ok(n) => return Ok(n),
+                Err(e) if is_cancelled(&e) => return Err(e),
                 Err(e) => {
                     let msg = e.to_string();
                     if llm.as_ref().is_some_and(|s| s.enabled()) {
@@ -275,6 +309,7 @@ pub async fn fetch_and_ingest(
     let mut last_error = String::new();
 
     for attempt in 1..=max_attempts {
+        ensure_not_cancelled(cancel)?;
         db.update_sync_task(
             task_id,
             8 + attempt as i32,
@@ -343,10 +378,12 @@ pub async fn fetch_and_ingest(
                 branch,
                 false,
                 Some(&llm),
+                cancel,
             )
             .await
             {
                 Ok(n) => return Ok(n),
+                Err(e) if is_cancelled(&e) => return Err(e),
                 Err(e) => {
                     last_error = e.to_string();
                     failure_ctx = Some(format!(
@@ -386,9 +423,11 @@ pub async fn fetch_and_ingest(
             None,
         )?;
         std::fs::create_dir_all(local_path)?;
+        ensure_not_cancelled(cancel)?;
 
         match fetcher::download_urls(&plan.urls, local_path, sync.download_concurrency).await {
             Ok(written) => {
+                ensure_not_cancelled(cancel)?;
                 db.update_sync_task(task_id, 40, "Download complete, parsing...", None)?;
                 return ingest_files(
                     db,
@@ -398,8 +437,8 @@ pub async fn fetch_and_ingest(
                     local_path,
                     &resolved_name,
                     &written,
-                    true,
                     false,
+                    cancel,
                 )
                 .await;
             }
@@ -428,7 +467,9 @@ async fn ingest_whole_repo(
     branch: &str,
     auto_name: bool,
     llm: Option<&LlmSettings>,
+    cancel: &CancellationToken,
 ) -> anyhow::Result<usize> {
+    ensure_not_cancelled(cancel)?;
     db.update_sync_task(
         task_id,
         15,
@@ -448,6 +489,7 @@ async fn ingest_whole_repo(
         git::clone_or_pull_try_branches(&repo_url_owned, &branch_owned, &local_path_buf)
     })
     .await??;
+    ensure_not_cancelled(cancel)?;
 
     {
         let conn_err = (|| -> anyhow::Result<()> {
@@ -478,6 +520,7 @@ async fn ingest_whole_repo(
             .filter_map(|p| Path::new(p).file_stem()?.to_str().map(|s| s.to_string()))
             .collect();
         let suggested = if let Some(settings) = llm.filter(|s| s.enabled()) {
+            ensure_not_cancelled(cancel)?;
             db.update_sync_task(task_id, 40, "AI naming library...", None)?;
             match ai::suggest_library_name(settings, &names, &sample_paths).await {
                 Ok(n) => n,
@@ -496,7 +539,9 @@ async fn ingest_whole_repo(
         display_name = suggested;
     }
 
+    ensure_not_cancelled(cancel)?;
     db.clear_library_components(library_id)?;
+    let _ = publish_progress_count(db, library_id);
     ingest_directory_chunked(
         db,
         config,
@@ -505,7 +550,7 @@ async fn ingest_whole_repo(
         local_path,
         &display_name,
         true,
-        None,
+        cancel,
     )
     .await
 }
@@ -519,12 +564,14 @@ async fn ingest_directory_chunked(
     local_path: &Path,
     library_name: &str,
     bulk: bool,
-    llm: Option<&LlmSettings>,
+    cancel: &CancellationToken,
 ) -> anyhow::Result<usize> {
+    ensure_not_cancelled(cancel)?;
     db.update_sync_task(task_id, 40, "Collecting component file paths...", None)?;
     let root = local_path.to_path_buf();
     let paths = tokio::task::spawn_blocking(move || parser::collect_component_paths(&root, bulk))
         .await?;
+    ensure_not_cancelled(cancel)?;
 
     if paths.is_empty() {
         anyhow::bail!(
@@ -552,46 +599,33 @@ async fn ingest_directory_chunked(
 
     let mut processed = 0usize;
     for (chunk_idx, chunk) in paths.chunks(batch_size).enumerate() {
+        ensure_not_cancelled(cancel)?;
         let library_id_owned = library_id.to_string();
         let root = local_path.to_path_buf();
         let chunk_owned = chunk.to_vec();
-        let mut parsed = tokio::task::spawn_blocking(move || {
+        let parsed = tokio::task::spawn_blocking(move || {
             parser::parse_paths_parallel(&library_id_owned, &root, &chunk_owned, parse_conc)
         })
         .await?;
-
-        if let Some(settings) = llm.filter(|s| s.enabled()) {
-            for (component, source, docs, examples) in &mut parsed {
-                match ai::enrich_component(settings, component, source).await {
-                    Ok(enrichment) => {
-                        apply_enrichment(component, docs, examples, enrichment);
-                    }
-                    Err(e) => {
-                        tracing::warn!("AI enrich failed for {}: {e}", component.name);
-                    }
-                }
-            }
-        }
 
         let batch = parsed;
         let n = batch.len();
         db.upsert_components_batch(library_name, &batch)?;
         processed += n;
+        let live_count = publish_progress_count(db, library_id).unwrap_or(processed as i64);
 
         let progress = 45 + ((processed * 50) / total.max(1)) as i32;
-        // Update progress every batch (not every file) to keep DB responsive
-        if chunk_idx % 1 == 0 || processed == total {
-            db.update_sync_task(
-                task_id,
-                progress.min(95),
-                &format!("Indexed {processed}/{total} components"),
-                None,
-            )?;
-        }
-        // Yield so HTTP/MCP can run between batches
+        db.update_sync_task(
+            task_id,
+            progress.min(95),
+            &format!("Indexed {processed}/{total} components (live {live_count})"),
+            None,
+        )?;
         tokio::task::yield_now().await;
+        let _ = chunk_idx;
     }
 
+    ensure_not_cancelled(cancel)?;
     let count = db.count_library_components(library_id)?;
     db.update_library_status(library_id, "ready", Some(count))?;
     db.update_sync_task(
@@ -614,9 +648,9 @@ async fn store_parsed_batched(
     task_id: &str,
     library_id: &str,
     library_name: &str,
-    mut parsed: Vec<ParsedBundle>,
-    llm: Option<&LlmSettings>,
+    parsed: Vec<ParsedBundle>,
     batch_size: usize,
+    cancel: &CancellationToken,
 ) -> anyhow::Result<usize> {
     let total = parsed.len();
     db.update_sync_task(
@@ -626,44 +660,23 @@ async fn store_parsed_batched(
         None,
     )?;
 
-    if let Some(settings) = llm.filter(|s| s.enabled()) {
-        for (i, (component, source, docs, examples)) in parsed.iter_mut().enumerate() {
-            db.update_sync_task(
-                task_id,
-                50 + ((i * 30) / total.max(1)) as i32,
-                &format!("AI enriching {} ({}/{})...", component.name, i + 1, total),
-                None,
-            )?;
-            match ai::enrich_component(settings, component, source).await {
-                Ok(enrichment) => {
-                    apply_enrichment(component, docs, examples, enrichment);
-                }
-                Err(e) => {
-                    tracing::warn!("AI enrich failed for {}: {e}", component.name);
-                    let _ = db.log(
-                        "warn",
-                        &format!("AI enrich failed for {}: {e}", component.name),
-                        Some(library_id),
-                    );
-                }
-            }
-        }
-    }
-
     let mut processed = 0usize;
     for chunk in parsed.chunks(batch_size) {
+        ensure_not_cancelled(cancel)?;
         db.upsert_components_batch(library_name, chunk)?;
         processed += chunk.len();
+        let live_count = publish_progress_count(db, library_id).unwrap_or(processed as i64);
         let progress = 80 + ((processed * 15) / total.max(1)) as i32;
         db.update_sync_task(
             task_id,
             progress.min(95),
-            &format!("Indexed {processed}/{total} components"),
+            &format!("Indexed {processed}/{total} components (live {live_count})"),
             None,
         )?;
         tokio::task::yield_now().await;
     }
 
+    ensure_not_cancelled(cancel)?;
     let count = db.count_library_components(library_id)?;
     db.update_library_status(library_id, "ready", Some(count))?;
     db.update_sync_task(

@@ -4,6 +4,7 @@ use serde_json::json;
 use crate::db::{Component, EventDef, LlmSettings, PropDef, SlotDef};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct AiEnrichment {
     pub description: Option<String>,
     pub docs: Option<String>,
@@ -15,6 +16,7 @@ pub struct AiEnrichment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct AiExample {
     pub title: String,
     pub code: String,
@@ -99,6 +101,8 @@ pub fn detect_repo_intent(prompt: &str) -> Option<(String, String, bool)> {
 }
 
 /// Enrich a component from source using an OpenAI-compatible chat API.
+/// Kept for potential future on-demand enrichment; ingest paths no longer call this.
+#[allow(dead_code)]
 pub async fn enrich_component(
     llm: &LlmSettings,
     component: &Component,
@@ -347,6 +351,7 @@ fn truncate(s: &str, max: usize) -> &str {
     }
 }
 
+#[allow(dead_code)]
 pub fn apply_enrichment(
     component: &mut Component,
     docs: &mut String,

@@ -208,7 +208,7 @@ export default function Settings() {
   };
 
   const handleClearKey = async () => {
-    if (!confirm("确定清除 API Key？AI 拉取与 AI 解析将不可用。")) return;
+    if (!confirm("确定清除 API Key？AI 拉取与自动命名将不可用。")) return;
     setError("");
     setOk("");
     setSaving(true);

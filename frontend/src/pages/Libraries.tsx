@@ -57,7 +57,6 @@ export default function Libraries() {
     branch: "main",
     rules: "",
     prompt: "",
-    use_ai: true,
   });
   const [files, setFiles] = useState<FileList | null>(null);
   const alertRef = useRef<HTMLDivElement>(null);
@@ -83,6 +82,7 @@ export default function Libraries() {
   }, [load]);
 
   useEffect(() => {
+    let wasRunning = false;
     const interval = setInterval(() => {
       api.tasks
         .list()
@@ -94,6 +94,9 @@ export default function Libraries() {
             watchedTasks.current.add(t.id);
           }
           setTasks(map);
+          // Live counts while jobs run; one more refresh when the last job finishes.
+          if (running.length > 0 || wasRunning) load();
+          wasRunning = running.length > 0;
 
           for (const t of allTasks) {
             if (t.status !== "failed") continue;
@@ -103,8 +106,6 @@ export default function Libraries() {
             const prefix = libName ? `「${libName}」` : "任务";
             setError(`${prefix}失败：${t.message || "未知错误"}`);
           }
-
-          if (running.length === 0) load();
         })
         .catch(() => {});
     }, 2000);
@@ -143,7 +144,6 @@ export default function Libraries() {
       branch: "main",
       rules: "",
       prompt: "",
-      use_ai: true,
     });
     setFiles(null);
     setMode("git");
@@ -170,7 +170,7 @@ export default function Libraries() {
           rules: form.rules || undefined,
         });
         if (files && files.length > 0) {
-          await api.libraries.upload(lib.id, Array.from(files), form.use_ai, autoName);
+          await api.libraries.upload(lib.id, Array.from(files), autoName);
         }
       } else {
         if (!form.prompt.trim()) {
@@ -212,6 +212,16 @@ export default function Libraries() {
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "同步失败");
+    }
+  };
+
+  const handleCancel = async (lib: Library) => {
+    setError("");
+    try {
+      await api.libraries.cancel(lib.id);
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "中断失败");
     }
   };
 
@@ -473,23 +483,34 @@ export default function Libraries() {
                         <Link to={`/libraries/${lib.id}`} className="link-action">
                           详情
                         </Link>
-                        <button
-                          type="button"
-                          className="btn-sync"
-                          disabled={!!task}
-                          onClick={() => handleSync(lib)}
-                          title={
-                            (lib.source_type || "git") === "git"
-                              ? "拉取远程并重新索引"
-                              : "重新扫描本地文件并索引"
-                          }
-                        >
-                          <svg viewBox="0 0 24 24" width="13" height="13">
-                            <path d="M21 12a9 9 0 1 1-2.6-6.4" />
-                            <path d="M21 3v6h-6" />
-                          </svg>
-                          {task ? "同步中" : "同步"}
-                        </button>
+                        {task ? (
+                          <button
+                            type="button"
+                            className="btn-sync"
+                            onClick={() => handleCancel(lib)}
+                            title="中断当前同步，已入库组件会保留"
+                            style={{ color: "var(--red)" }}
+                          >
+                            中断
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn-sync"
+                            onClick={() => handleSync(lib)}
+                            title={
+                              (lib.source_type || "git") === "git"
+                                ? "拉取远程并重新索引"
+                                : "重新扫描本地文件并索引"
+                            }
+                          >
+                            <svg viewBox="0 0 24 24" width="13" height="13">
+                              <path d="M21 12a9 9 0 1 1-2.6-6.4" />
+                              <path d="M21 3v6h-6" />
+                            </svg>
+                            同步
+                          </button>
+                        )}
                         <span className="link-action danger" onClick={() => handleDelete(lib.id)}>
                           删除
                         </span>
@@ -602,19 +623,10 @@ export default function Libraries() {
               )}
 
               {mode === "upload" && (
-                <label className="modal-check">
-                  <input
-                    type="checkbox"
-                    checked={form.use_ai}
-                    onChange={(e) => setForm({ ...form, use_ai: e.target.checked })}
-                  />
-                  使用 AI 解析上传的组件文件
-                  {!aiEnabled && (
-                    <span style={{ color: "var(--text-4)", marginLeft: 6 }}>
-                      （需在「系统设置」配置 LLM）
-                    </span>
-                  )}
-                </label>
+                <div className="hint-text">
+                  入库仅本地解析 Props/Events 等；名称留空时可由 AI 自动命名
+                  {!aiEnabled && "（自动命名需配置 LLM）"}
+                </div>
               )}
             </div>
             <div className="modal-footer">

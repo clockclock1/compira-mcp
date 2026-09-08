@@ -893,7 +893,7 @@ impl Database {
     ) -> anyhow::Result<()> {
         let conn = self.conn.lock().unwrap();
         if let Some(s) = status {
-            let finished = if s == "completed" || s == "failed" {
+            let finished = if s == "completed" || s == "failed" || s == "cancelled" {
                 Some(Utc::now().to_rfc3339())
             } else {
                 None
@@ -909,6 +909,21 @@ impl Database {
             )?;
         }
         Ok(())
+    }
+
+    /// Mark pending/running tasks for a library as cancelled. Returns how many rows changed.
+    pub fn cancel_library_tasks(&self, library_id: &str) -> anyhow::Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE sync_tasks
+             SET status = 'cancelled',
+                 message = COALESCE(message, '') || CASE WHEN message IS NULL OR message = '' THEN 'Cancelled by user' ELSE ' · Cancelled by user' END,
+                 finished_at = COALESCE(finished_at, ?1),
+                 progress = CASE WHEN progress < 1 THEN 1 ELSE progress END
+             WHERE library_id = ?2 AND status IN ('pending', 'running')",
+            params![Utc::now().to_rfc3339(), library_id],
+        )?;
+        Ok(n)
     }
 
     pub fn get_sync_task(&self, id: &str) -> anyhow::Result<Option<SyncTask>> {

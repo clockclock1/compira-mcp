@@ -204,9 +204,13 @@ export const api = {
     delete: (id: string) => request<void>(`/libraries/${id}`, { method: "DELETE" }),
     sync: (id: string) =>
       request<{ task_id: string }>(`/libraries/${id}/sync`, { method: "POST" }),
-    upload: async (id: string, files: File[], useAi = true, autoName = false) => {
+    cancel: (id: string) =>
+      request<{ cancelled: boolean; tasks_marked: number; component_count: number }>(
+        `/libraries/${id}/cancel`,
+        { method: "POST" },
+      ),
+    upload: async (id: string, files: File[], autoName = false) => {
       const form = new FormData();
-      form.append("use_ai", useAi ? "true" : "false");
       form.append("auto_name", autoName ? "true" : "false");
       for (const f of files) form.append("files", f);
       const headers = new Headers();
@@ -221,7 +225,6 @@ export const api = {
       return res.json() as Promise<{
         task_id: string;
         files: string[];
-        use_ai: boolean;
         auto_name: boolean;
       }>;
     },

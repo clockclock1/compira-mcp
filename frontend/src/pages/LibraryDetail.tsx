@@ -1,6 +1,6 @@
 import { Link, useParams } from "react-router-dom";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, Component, Library } from "../api/client";
+import { api, Component, Library, SyncTask } from "../api/client";
 import AlertBanner from "../components/AlertBanner";
 import Modal from "../components/Modal";
 
@@ -13,11 +13,12 @@ export default function LibraryDetail() {
   const [search, setSearch] = useState("");
   const [fwFilter, setFwFilter] = useState("全部");
   const [busy, setBusy] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [activeTask, setActiveTask] = useState<SyncTask | null>(null);
   const [aiEnabled, setAiEnabled] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [showFetch, setShowFetch] = useState(false);
   const [files, setFiles] = useState<FileList | null>(null);
-  const [useAi, setUseAi] = useState(true);
   const [fetchPrompt, setFetchPrompt] = useState("");
   const alertRef = useRef<HTMLDivElement>(null);
   const watchedTasks = useRef<Set<string>>(new Set());
@@ -41,23 +42,33 @@ export default function LibraryDetail() {
 
   useEffect(() => {
     if (!id) return;
-    const interval = setInterval(() => {
-      api.tasks.list(id).then((tasks) => {
-        for (const t of tasks) {
-          if (t.status === "running" || t.status === "pending") {
-            watchedTasks.current.add(t.id);
+    let wasRunning = false;
+    const tick = () => {
+      api.tasks
+        .list(id)
+        .then((tasks) => {
+          for (const t of tasks) {
+            if (t.status === "running" || t.status === "pending") {
+              watchedTasks.current.add(t.id);
+            }
           }
-        }
-        for (const t of tasks) {
-          if (t.status !== "failed") continue;
-          if (!watchedTasks.current.has(t.id) || seenFailedTasks.current.has(t.id)) continue;
-          seenFailedTasks.current.add(t.id);
-          setError(t.message || "任务失败");
-        }
-        const running = tasks.some((t) => t.status === "running" || t.status === "pending");
-        if (!running) load();
-      }).catch(() => {});
-    }, 2500);
+          for (const t of tasks) {
+            if (t.status !== "failed") continue;
+            if (!watchedTasks.current.has(t.id) || seenFailedTasks.current.has(t.id)) continue;
+            seenFailedTasks.current.add(t.id);
+            setError(t.message || "任务失败");
+          }
+          const running =
+            tasks.find((t) => t.status === "running" || t.status === "pending") || null;
+          setActiveTask(running);
+          // Live reload while syncing; one more refresh when the job finishes.
+          if (running || wasRunning) load();
+          wasRunning = !!running;
+        })
+        .catch(() => {});
+    };
+    tick();
+    const interval = setInterval(tick, 1500);
     return () => clearInterval(interval);
   }, [id, load]);
 
@@ -89,6 +100,7 @@ export default function LibraryDetail() {
     setError("");
     try {
       await api.libraries.sync(id);
+      load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "同步失败");
     } finally {
@@ -96,13 +108,31 @@ export default function LibraryDetail() {
     }
   };
 
+  const handleCancel = async () => {
+    if (!id) return;
+    setCancelling(true);
+    setError("");
+    try {
+      await api.libraries.cancel(id);
+      setActiveTask(null);
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "中断失败");
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  const isSyncing =
+    !!activeTask || library?.status === "syncing" || busy;
+
   const handleUpload = async (e: FormEvent) => {
     e.preventDefault();
     if (!id || !files?.length) return;
     setBusy(true);
     setError("");
     try {
-      await api.libraries.upload(id, Array.from(files), useAi);
+      await api.libraries.upload(id, Array.from(files));
       setShowUpload(false);
       setFiles(null);
     } catch (err) {
@@ -143,7 +173,13 @@ export default function LibraryDetail() {
     return <div className="loading">加载中...</div>;
   }
 
-  const statusOk = library?.status === "ready";
+  const statusLabel = activeTask
+    ? activeTask.status === "pending"
+      ? "排队中"
+      : "同步中"
+    : library?.status === "ready"
+      ? "已同步"
+      : library?.status || "-";
 
   return (
     <div className="page">
@@ -165,13 +201,15 @@ export default function LibraryDetail() {
             style={{
               padding: "4px 10px",
               fontSize: 11.5,
-              ...(library?.status === "error"
+              ...(library?.status === "error" && !activeTask
                 ? { background: "rgba(248,113,113,0.12)", color: "var(--red)", border: "1px solid rgba(248,113,113,0.35)" }
-                : {}),
+                : activeTask
+                  ? { background: "rgba(56,189,248,0.12)", color: "var(--accent)", border: "1px solid rgba(56,189,248,0.35)" }
+                  : {}),
             }}
           >
             <span className="dot" style={{ width: 6, height: 6 }} />
-            {statusOk ? "已同步" : library?.status || "-"}
+            {statusLabel}
           </span>
         </div>
         <div className="header-actions">
@@ -181,22 +219,34 @@ export default function LibraryDetail() {
           <button className="btn btn-ghost" onClick={() => setShowFetch(true)}>
             AI 拉取
           </button>
-          <button
-            className="btn btn-primary"
-            onClick={handleSync}
-            disabled={busy || library?.status === "syncing"}
-            title={
-              sourceType === "git"
-                ? "拉取远程仓库并重新索引"
-                : "重新扫描本地目录并索引"
-            }
-          >
-            <svg viewBox="0 0 24 24" width="14" height="14">
-              <path d="M21 12a9 9 0 1 1-2.6-6.4" />
-              <path d="M21 3v6h-6" />
-            </svg>
-            {busy || library?.status === "syncing" ? "同步中…" : "立即同步"}
-          </button>
+          {isSyncing ? (
+            <button
+              className="btn btn-ghost"
+              onClick={handleCancel}
+              disabled={cancelling}
+              title="中断当前同步，已入库组件会保留"
+              style={{ color: "var(--red)" }}
+            >
+              {cancelling ? "中断中…" : "中断同步"}
+            </button>
+          ) : (
+            <button
+              className="btn btn-primary"
+              onClick={handleSync}
+              disabled={busy}
+              title={
+                sourceType === "git"
+                  ? "拉取远程仓库并重新索引"
+                  : "重新扫描本地目录并索引"
+              }
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14">
+                <path d="M21 12a9 9 0 1 1-2.6-6.4" />
+                <path d="M21 3v6h-6" />
+              </svg>
+              立即同步
+            </button>
+          )}
         </div>
       </div>
 
@@ -208,6 +258,25 @@ export default function LibraryDetail() {
           <AlertBanner title="此组件库上次操作失败" message={library.last_error} />
         )}
       </div>
+      {activeTask && (
+        <div className="tip-banner" style={{ marginBottom: 16 }}>
+          <svg viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 8v4" />
+            <path d="M12 16h.01" />
+          </svg>
+          <span style={{ flex: 1 }}>
+            {activeTask.message || "同步进行中…"}
+            {typeof activeTask.progress === "number" ? ` · ${activeTask.progress}%` : ""}
+            {" · 下方列表会实时显示已入库组件"}
+          </span>
+          {typeof activeTask.progress === "number" && activeTask.progress > 0 && (
+            <div className="progress-bar" style={{ width: 120, marginLeft: 8 }}>
+              <div className="progress-bar-fill" style={{ width: `${activeTask.progress}%` }} />
+            </div>
+          )}
+        </div>
+      )}
       {!aiEnabled && (
         <div className="tip-banner">
           <svg viewBox="0 0 24 24">
@@ -223,8 +292,8 @@ export default function LibraryDetail() {
 
       <div className="info-grid">
         <div className="info-card">
-          <div className="info-label">组件数</div>
-          <div className="info-value">{library?.component_count ?? 0}</div>
+          <div className="info-label">组件数{isSyncing ? "（实时）" : ""}</div>
+          <div className="info-value">{library?.component_count ?? componentsTotal ?? 0}</div>
         </div>
         <div className="info-card">
           <div className="info-label">上游</div>
@@ -367,7 +436,7 @@ export default function LibraryDetail() {
       <Modal open={showUpload} onClose={() => setShowUpload(false)}>
           <div className="modal-header">
             <div className="modal-title">上传组件</div>
-            <div className="modal-sub">上传后本地解析，可选 AI 补全文档 / 示例 / Props 说明</div>
+            <div className="modal-sub">上传后本地解析入库（不逐文件调用 AI 补全）</div>
           </div>
           <form onSubmit={handleUpload}>
             <div className="modal-body">
@@ -386,10 +455,6 @@ export default function LibraryDetail() {
                   .wxml（同目录 js/json/wxss 会关联）
                 </div>
               </div>
-              <label className="modal-check">
-                <input type="checkbox" checked={useAi} onChange={(e) => setUseAi(e.target.checked)} />
-                使用 AI 处理组件文件
-              </label>
             </div>
             <div className="modal-footer">
               <button type="button" className="btn btn-ghost" onClick={() => setShowUpload(false)}>

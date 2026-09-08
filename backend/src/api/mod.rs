@@ -36,6 +36,7 @@ pub fn routes(state: AppState) -> Router {
             get(get_library).delete(delete_library).patch(update_library),
         )
         .route("/libraries/{id}/sync", post(sync_library))
+        .route("/libraries/{id}/cancel", post(cancel_library_job))
         .route("/libraries/{id}/upload", post(upload_components))
         .route("/libraries/{id}/fetch", post(fetch_components))
         .route("/libraries/{id}/components", get(list_components))
@@ -562,7 +563,6 @@ async fn upload_components(
         return err_response(e);
     }
 
-    let mut use_ai = true;
     let mut auto_name = false;
     let mut relative_paths: Vec<String> = Vec::new();
 
@@ -581,8 +581,8 @@ async fn upload_components(
 
         let name = field.name().unwrap_or("").to_string();
         if name == "use_ai" {
-            let text = field.text().await.unwrap_or_default();
-            use_ai = text == "1" || text.eq_ignore_ascii_case("true");
+            // Legacy field ignored: per-file AI enrich removed.
+            let _ = field.text().await;
             continue;
         }
         if name == "auto_name" {
@@ -641,14 +641,13 @@ async fn upload_components(
 
     match state
         .tasks
-        .spawn_ingest(id, relative_paths.clone(), use_ai, auto_name)
+        .spawn_ingest(id, relative_paths.clone(), auto_name)
     {
         Ok(task_id) => (
             StatusCode::ACCEPTED,
             Json(serde_json::json!({
                 "task_id": task_id,
                 "files": relative_paths,
-                "use_ai": use_ai,
                 "auto_name": auto_name,
             })),
         )
@@ -727,6 +726,16 @@ async fn sync_library(
             Json(serde_json::json!({ "task_id": task_id })),
         )
             .into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn cancel_library_job(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.tasks.cancel_library(&id) {
+        Ok(body) => Json(body).into_response(),
         Err(e) => err_response(e),
     }
 }
