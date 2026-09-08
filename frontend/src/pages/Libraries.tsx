@@ -572,12 +572,12 @@ export default function Libraries() {
                     className="modal-input"
                     type="file"
                     multiple
-                    accept=".vue,.uvue,.tsx,.jsx,.ts,.js,.md,.zip,application/zip"
+                    accept=".vue,.uvue,.tsx,.jsx,.ts,.js,.svelte,.astro,.dart,.wxml,.html,.css,.scss,.wxss,.json,.md,.zip,application/zip"
                     onChange={(e) => setFiles(e.target.files)}
                   />
                   <div className="hint-text" style={{ marginTop: 6 }}>
-                    可多选源码文件，或上传 .zip 整包；入库后解析 Props/Events，并可选用 AI 补全。名称留空时由 AI
-                    根据组件自动命名
+                    支持 Vue/React/Solid/Taro、Svelte、Astro、Angular(*.component.ts)、Lit/Web
+                    Components、小程序(.wxml)、Flutter(.dart) 等；可多选或上传 .zip
                   </div>
                 </div>
               )}
@@ -594,8 +594,8 @@ export default function Libraries() {
                     style={{ minHeight: 100 }}
                   />
                   <div className="hint-text" style={{ marginTop: 6 }}>
-                    指定组件时由 AI 定位 raw 文件；若只给仓库地址（或加「全部组件」），会克隆仓库并批量导入所有
-                    .vue/.uvue/.tsx/.jsx
+                    指定组件时由 AI 定位 raw 文件；若只给仓库地址（或加「全部组件」），会克隆仓库并批量导入组件源文件
+                    （Vue/React/Svelte/Astro/Angular/小程序/Flutter 等）
                     {!aiEnabled && "（整库导入可不配 LLM；按组件拉取需配置）"}
                   </div>
                 </div>

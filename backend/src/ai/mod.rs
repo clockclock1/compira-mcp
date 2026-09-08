@@ -194,7 +194,7 @@ pub async fn plan_fetch_urls_with_context(
 规则：
 1. 若用户只给了 GitHub/GitLab/Gitee 仓库地址、未指定具体组件名，或明确说「全部/所有组件/整库」，必须 mode=repo 且 whole_repo=true
 2. 若指定了具体组件（如 Button、Tag），mode=urls，给出可直接 GET 的文件地址（raw.githubusercontent.com / jsDelivr / unpkg / GitLab·Gitee raw）
-3. urls 只含 .vue/.uvue/.tsx/.jsx/.ts/.js 及可选 README.md；不要 HTML/blob 页；最多 30 个
+3. urls 只含组件源文件：.vue/.uvue/.tsx/.jsx/.svelte/.astro/.dart/.wxml/.ts/.js 及可选 .html/.css/.scss/.md；不要 HTML 文档页/blob 页；最多 30 个
 4. Element Plus 分支用 dev（不是 main）
 5. 若提供了「上次失败信息」：必须给出与失败列表不同的新链接（可换站点、换路径、换包源），禁止原样重复；不要只把同一 GitHub 路径改成镜像域名糊弄
 6. library_name 必填：8～24 字"#;

@@ -36,6 +36,42 @@ function sourceLabel(t?: string) {
   return "Git";
 }
 
+const FRAMEWORK_META: Record<string, { name: string; color: string }> = {
+  vue: { name: "Vue", color: "var(--accent)" },
+  "uni-app": { name: "Uni-app", color: "#2dd4bf" },
+  react: { name: "React", color: "var(--accent-2)" },
+  solid: { name: "Solid", color: "#38bdf8" },
+  taro: { name: "Taro", color: "#a78bfa" },
+  angular: { name: "Angular", color: "var(--red)" },
+  svelte: { name: "Svelte", color: "#fb7185" },
+  lit: { name: "Lit", color: "#fbbf24" },
+  "web-components": { name: "Web Components", color: "#94a3b8" },
+  astro: { name: "Astro", color: "#c084fc" },
+  miniprogram: { name: "小程序", color: "#34d399" },
+  flutter: { name: "Flutter", color: "#60a5fa" },
+  js: { name: "JS/TS", color: "#64748b" },
+  unknown: { name: "未识别", color: "var(--text-4)" },
+};
+
+const FRAMEWORK_COLOR_FALLBACK = [
+  "var(--accent)",
+  "var(--accent-2)",
+  "var(--violet)",
+  "#fb7185",
+  "#fbbf24",
+  "#34d399",
+  "#60a5fa",
+  "#a78bfa",
+];
+
+function frameworkLabel(key: string) {
+  return FRAMEWORK_META[key]?.name || key;
+}
+
+function frameworkColor(key: string, index: number) {
+  return FRAMEWORK_META[key]?.color || FRAMEWORK_COLOR_FALLBACK[index % FRAMEWORK_COLOR_FALLBACK.length];
+}
+
 export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [libraries, setLibraries] = useState<Library[]>([]);
@@ -107,22 +143,19 @@ export default function Dashboard() {
     [libraries],
   );
 
-  const sourceDist = useMemo(() => {
-    const buckets: Record<string, { name: string; count: number; color: string }> = {
-      git: { name: "Git 同步", count: 0, color: "var(--accent-2)" },
-      fetch: { name: "AI 拉取", count: 0, color: "var(--violet)" },
-      upload: { name: "本地上传", count: 0, color: "var(--accent)" },
-    };
-    for (const lib of libraries) {
-      const key = lib.source_type || "git";
-      const b = buckets[key] || buckets.git;
-      b.count += lib.component_count || 0;
-    }
-    const total = Object.values(buckets).reduce((s, b) => s + b.count, 0) || 1;
-    return Object.values(buckets)
-      .filter((b) => b.count > 0)
-      .map((b) => ({ ...b, pct: Math.round((b.count * 100) / total) }));
-  }, [libraries]);
+  const frameworkDist = useMemo(() => {
+    const rows = stats?.frameworks || [];
+    const total = rows.reduce((s, r) => s + (r.count || 0), 0) || 1;
+    return rows
+      .filter((r) => r.count > 0)
+      .map((r, i) => ({
+        key: r.framework,
+        name: frameworkLabel(r.framework),
+        count: r.count,
+        pct: Math.round((r.count * 100) / total),
+        color: frameworkColor(r.framework, i),
+      }));
+  }, [stats]);
 
   const runningTasks = tasks.filter(
     (t) => t.status === "running" || t.status === "pending",
@@ -346,17 +379,17 @@ export default function Dashboard() {
       <div className="dash-row-3">
         <GlassCard style={{ padding: 20, minHeight: 204 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-            <div className="card-title">组件来源分布</div>
+            <div className="card-title">技术框架分布</div>
             <span style={{ fontSize: 12, color: "var(--text-3)" }}>
               {(stats?.components || 0).toLocaleString()} 个组件
             </span>
           </div>
-          {sourceDist.length === 0 ? (
-            <EmptyState title="暂无索引数据" description="导入组件库后将显示来源占比" />
+          {frameworkDist.length === 0 ? (
+            <EmptyState title="暂无索引数据" description="导入组件后将按 Vue / React / Svelte 等框架分类统计" />
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {sourceDist.map((d) => (
-                <div className="dist-bar-row" key={d.name}>
+              {frameworkDist.map((d) => (
+                <div className="dist-bar-row" key={d.key}>
                   <div className="dist-label">
                     <span>{d.name}</span>
                     <span>

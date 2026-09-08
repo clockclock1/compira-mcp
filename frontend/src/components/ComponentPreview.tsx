@@ -8,7 +8,7 @@ type Props = {
 };
 
 /**
- * Sandboxed live preview for Vue SFC / React when source is available.
+ * Sandboxed live preview — Vue / React / Solid / Taro JSX when possible; others show source.
  */
 export default function ComponentPreview({ name, framework, source, exampleCode }: Props) {
   const fw = framework.toLowerCase();
@@ -19,8 +19,16 @@ export default function ComponentPreview({ name, framework, source, exampleCode 
       if (fw.includes("vue") || fw.includes("uni") || source.includes("<template")) {
         return buildVuePreview(source, exampleCode);
       }
-      if (fw.includes("react") || /jsx|tsx/i.test(fw)) {
+      if (
+        fw.includes("react") ||
+        fw.includes("solid") ||
+        fw.includes("taro") ||
+        /jsx|tsx/i.test(fw)
+      ) {
         return buildReactPreview(name, source, exampleCode);
+      }
+      if (fw.includes("svelte")) {
+        return buildFallbackPreview(name, framework, source, "Svelte 暂以源码展示（可后续接运行时）");
       }
       return buildFallbackPreview(name, framework, source);
     } catch (e) {
@@ -146,10 +154,11 @@ root.render(${renderExpr});
 </html>`;
 }
 
-function buildFallbackPreview(name: string, framework: string, source: string) {
+function buildFallbackPreview(name: string, framework: string, source: string, note?: string) {
   return `<!DOCTYPE html><html><body style="margin:0;background:#0b1220;color:#9BB0BE;font-family:system-ui;padding:20px">
   <h3 style="color:#eaf2f6">${name}</h3>
-  <p>框架 ${framework || "unknown"} 暂不支持自动实时预览，下方为源码摘录。</p>
+  <p>框架 <b style="color:#eaf2f6">${framework || "unknown"}</b>：${note || "暂不支持自动实时预览，下方为源码摘录（含关联文件）"}。</p>
+  <p style="font-size:12px;opacity:.8">已支持入库：Vue / React / Solid / Taro / Angular / Svelte / Lit / Web Components / Astro / 小程序 / Uni-app / Flutter</p>
   <pre style="background:#111827;padding:12px;border-radius:8px;overflow:auto;max-height:70vh;font-size:12px;color:#c5d4de">${source
     .slice(0, 4000)
     .replace(/</g, "&lt;")}</pre>

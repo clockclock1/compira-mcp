@@ -378,11 +378,12 @@ export default function LibraryDetail() {
                   type="file"
                   multiple
                   required
-                  accept=".vue,.uvue,.tsx,.jsx,.ts,.js,.md,.zip,application/zip"
+                  accept=".vue,.uvue,.tsx,.jsx,.ts,.js,.svelte,.astro,.dart,.wxml,.html,.css,.scss,.wxss,.json,.md,.zip,application/zip"
                   onChange={(e) => setFiles(e.target.files)}
                 />
                 <div className="hint-text" style={{ marginTop: 6 }}>
-                  支持多选源码，或上传 .zip 整包自动解压入库
+                  支持多框架源码与 .zip；Angular 可传 *.component.ts（同目录 html/css 会自动关联）；小程序传
+                  .wxml（同目录 js/json/wxss 会关联）
                 </div>
               </div>
               <label className="modal-check">
@@ -421,7 +422,7 @@ export default function LibraryDetail() {
                   style={{ minHeight: 100 }}
                 />
                 <div className="hint-text" style={{ marginTop: 6 }}>
-                  整库导入扫描 .vue/.uvue/.tsx/.jsx（可不配 LLM）；按组件拉取需配置 LLM
+                  整库导入扫描 Vue/React/Svelte/Astro/Dart/WXML 与 *.component.ts 等（可不配 LLM）；按组件拉取需配置 LLM
                 </div>
               </div>
             </div>

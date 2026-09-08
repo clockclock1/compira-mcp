@@ -136,6 +136,7 @@ export interface Stats {
   components: number;
   api_keys: number;
   users: number;
+  frameworks?: { framework: string; count: number }[];
 }
 
 export const api = {

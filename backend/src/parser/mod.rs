@@ -6,10 +6,39 @@ use walkdir::WalkDir;
 
 use crate::db::{Component, EventDef, PropDef, SlotDef};
 
-/// Explicit uploads / single-file paths may include script modules.
-const COMPONENT_EXTENSIONS: &[&str] = &["vue", "uvue", "tsx", "jsx", "ts", "js"];
-/// Whole-repo bulk scan: UI component files only (avoids indexing every .ts/.js util).
-const BULK_COMPONENT_EXTENSIONS: &[&str] = &["vue", "uvue", "tsx", "jsx"];
+/// Explicit uploads / single-file paths may include script modules and multi-file frameworks.
+const COMPONENT_EXTENSIONS: &[&str] = &[
+    "vue", "uvue", "tsx", "jsx", "ts", "js", "svelte", "astro", "dart", "wxml", "html",
+];
+/// Whole-repo bulk scan: UI-ish files only (avoids indexing every util .ts/.js).
+const BULK_COMPONENT_EXTENSIONS: &[&str] = &[
+    "vue", "uvue", "tsx", "jsx", "svelte", "astro", "wxml",
+];
+/// Angular / Lit / Flutter-style entry files that should be included in bulk scans.
+fn is_bulk_named_component(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let path_l = path.to_string_lossy().to_lowercase().replace('\\', "/");
+    if name.ends_with(".component.ts")
+        || name.ends_with(".component.js")
+        || name.ends_with(".element.ts")
+        || name.ends_with(".element.js")
+    {
+        return true;
+    }
+    if name.ends_with(".dart") {
+        return name.ends_with("_widget.dart")
+            || name.ends_with(".widget.dart")
+            || path_l.contains("/widgets/")
+            || path_l.contains("/components/")
+            || path_l.contains("/ui/");
+    }
+    false
+}
+
 const QUOTED: &str = r#"['"]([^'"]+)['"]"#;
 
 pub type ParsedBundle = (Component, String, String, Vec<(String, String)>);
@@ -40,17 +69,51 @@ pub fn parse_component_file(
         .and_then(|e| e.to_str())
         .unwrap_or_default()
         .to_lowercase();
-    if !is_component_extension(&ext) {
+    if !is_component_extension(&ext) && !is_bulk_named_component(&path) {
         anyhow::bail!("unsupported component file: {relative_path}");
     }
-    let source = std::fs::read_to_string(&path)?;
+    let primary = std::fs::read_to_string(&path)?;
     let rel_path = relative_path.replace('\\', "/");
-    let framework = detect_framework(root, &ext, &source);
-    let parsed = if matches!(ext.as_str(), "vue" | "uvue") {
-        parse_vue_component(&source, &rel_path, &framework)
+    let framework = detect_framework(root, &path, &ext, &primary);
+
+    // Skip non-component scripts that slipped into explicit .ts/.js uploads/scans.
+    if matches!(ext.as_str(), "ts" | "js" | "html")
+        && matches!(
+            framework.as_str(),
+            "js" | "unknown"
+        )
+        && !looks_like_generic_component(&path, &primary)
+    {
+        anyhow::bail!("not a component entry: {relative_path}");
+    }
+
+    let companions = load_companions(root, &path, &framework);
+    let source = if companions.is_empty() {
+        primary.clone()
     } else {
-        parse_script_component(&source, &rel_path, &framework)
+        let mut bundled = format!("// ===== {} =====\n{primary}\n", path.file_name().and_then(|s| s.to_str()).unwrap_or("main"));
+        for (name, body) in &companions {
+            bundled.push_str(&format!("\n// ===== {name} =====\n{body}\n"));
+        }
+        bundled
     };
+
+    let parsed = match framework.as_str() {
+        "vue" | "uni-app" => parse_vue_component(&primary, &rel_path, &framework),
+        "svelte" => parse_svelte_component(&primary, &rel_path),
+        "astro" => parse_astro_component(&primary, &rel_path),
+        "angular" => parse_angular_component(&primary, &rel_path),
+        "miniprogram" => parse_miniprogram_component(&primary, &rel_path, &companions),
+        "flutter" => parse_flutter_component(&primary, &rel_path),
+        "lit" | "web-components" => parse_lit_or_wc_component(&primary, &rel_path, &framework),
+        "react" | "solid" | "taro" => {
+            let mut p = parse_script_component(&primary, &rel_path, &framework);
+            p.props = extract_tsx_props_hints(&primary);
+            p
+        }
+        _ => parse_script_component(&primary, &rel_path, &framework),
+    };
+
     let docs = find_docs(&path);
     let examples = find_examples(&path, &parsed.name);
     let component = Component {
@@ -68,21 +131,151 @@ pub fn parse_component_file(
     Ok((component, source, docs, examples))
 }
 
-fn detect_framework(root: &Path, ext: &str, source: &str) -> String {
-    if ext == "uvue" || is_uniapp_project(root) {
+fn detect_framework(root: &Path, path: &Path, ext: &str, source: &str) -> String {
+    let lower = source.to_lowercase();
+    let fname = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    if ext == "uvue" || (ext == "vue" && is_uniapp_project(root)) {
         return "uni-app".into();
     }
+    if ext == "wxml" || fname.ends_with(".wxml") {
+        return "miniprogram".into();
+    }
+    if ext == "svelte" {
+        return "svelte".into();
+    }
+    if ext == "astro" {
+        return "astro".into();
+    }
+    if ext == "dart" {
+        return "flutter".into();
+    }
+    if fname.ends_with(".component.ts")
+        || fname.ends_with(".component.js")
+        || lower.contains("@angular/core")
+        || lower.contains("@component(")
+    {
+        return "angular".into();
+    }
+    if lower.contains("solid-js")
+        || lower.contains("from \"solid-js\"")
+        || lower.contains("from 'solid-js'")
+        || lower.contains("@solidjs")
+    {
+        return "solid".into();
+    }
+    if lower.contains("@tarojs")
+        || lower.contains("from \"@tarojs")
+        || lower.contains("from '@tarojs")
+        || lower.contains("taro.createelement")
+    {
+        return "taro".into();
+    }
+    if lower.contains("lit-element")
+        || lower.contains("from \"lit\"")
+        || lower.contains("from 'lit'")
+        || lower.contains("from \"lit/")
+        || lower.contains("from 'lit/")
+        || lower.contains("litelement")
+        || lower.contains("@customelement")
+    {
+        return "lit".into();
+    }
+    if lower.contains("customelements.define")
+        || lower.contains("extends htmlelement")
+        || (lower.contains("shadowroot") && matches!(ext, "ts" | "js"))
+    {
+        return "web-components".into();
+    }
     if matches!(ext, "tsx" | "jsx")
-        || source.contains("React.")
-        || source.contains("from \"react\"")
-        || source.contains("from 'react'")
+        || lower.contains("from \"react\"")
+        || lower.contains("from 'react'")
+        || lower.contains("react.")
+        || lower.contains("from \"react/")
     {
         return "react".into();
     }
-    if matches!(ext, "vue") {
+    if ext == "vue" {
         return "vue".into();
     }
-    "js".into()
+    if matches!(ext, "ts" | "js") && looks_like_generic_component(path, source) {
+        return "js".into();
+    }
+    if ext == "html" {
+        return "web-components".into();
+    }
+    "unknown".into()
+}
+
+fn looks_like_generic_component(path: &Path, source: &str) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if name.ends_with(".component.ts")
+        || name.ends_with(".component.js")
+        || name.ends_with(".element.ts")
+        || name.ends_with(".element.js")
+    {
+        return true;
+    }
+    let lower = source.to_lowercase();
+    lower.contains("export default")
+        || lower.contains("customelements.define")
+        || lower.contains("@component")
+        || lower.contains("definecomponent")
+        || lower.contains("litelement")
+        || lower.contains("createelement")
+        || Regex::new(r"(?m)^export\s+(function|const|class)\s+[A-Z]")
+            .ok()
+            .is_some_and(|re| re.is_match(source))
+}
+
+fn load_companions(root: &Path, path: &Path, framework: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let dir = path.parent().unwrap_or(root);
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+
+    let mut try_read = |filename: &str| {
+        let p = dir.join(filename);
+        if p.is_file() {
+            if let Ok(body) = std::fs::read_to_string(&p) {
+                out.push((filename.to_string(), body));
+            }
+        }
+    };
+
+    match framework {
+        "angular" => {
+            try_read(&format!("{stem}.html"));
+            try_read(&format!("{stem}.css"));
+            try_read(&format!("{stem}.scss"));
+            try_read(&format!("{stem}.less"));
+            // button.component.ts → also try button.component.* already covered by stem
+        }
+        "miniprogram" => {
+            try_read(&format!("{stem}.js"));
+            try_read(&format!("{stem}.ts"));
+            try_read(&format!("{stem}.json"));
+            try_read(&format!("{stem}.wxss"));
+            try_read(&format!("{stem}.wxs"));
+        }
+        "svelte" | "astro" | "vue" | "uni-app" | "flutter" => {}
+        _ => {
+            try_read(&format!("{stem}.css"));
+            try_read(&format!("{stem}.scss"));
+        }
+    }
+    out
 }
 
 fn parse_script_component(source: &str, file_path: &str, framework: &str) -> ParsedComponent {
@@ -102,6 +295,267 @@ fn parse_script_component(source: &str, file_path: &str, framework: &str) -> Par
     }
 }
 
+fn parse_svelte_component(source: &str, file_path: &str) -> ParsedComponent {
+    let mut props = Vec::new();
+    if let Ok(re) = Regex::new(r"(?m)^\s*export\s+let\s+(\w+)") {
+        for name in capture_all(&re, source) {
+            props.push(PropDef {
+                name,
+                r#type: None,
+                default: None,
+                required: false,
+                description: None,
+            });
+        }
+    }
+    // Svelte 5: let { foo, bar } = $props()
+    if let Ok(re2) = Regex::new(r"let\s*\{([^}]+)\}\s*=\s*\$props\s*\(") {
+        if let Some(caps) = re2.captures(source) {
+            for part in caps[1].split(',') {
+                let name = part
+                    .split(':')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .trim_start_matches("...")
+                    .to_string();
+                if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    props.push(PropDef {
+                        name,
+                        r#type: None,
+                        default: None,
+                        required: false,
+                        description: Some("Svelte $props".into()),
+                    });
+                }
+            }
+        }
+    }
+    let mut events = Vec::new();
+    if let Ok(re) = Regex::new(r#"\bon:(\w+)"#) {
+        for name in capture_all(&re, source) {
+            events.push(EventDef {
+                name,
+                payload: None,
+                description: None,
+            });
+        }
+    }
+    ParsedComponent {
+        name: clean_component_stem(file_path),
+        description: extract_description(source, source),
+        props: dedupe_props(props),
+        events,
+        slots: extract_slots(source),
+        tags: vec!["svelte".into()],
+    }
+}
+
+fn parse_astro_component(source: &str, file_path: &str) -> ParsedComponent {
+    let frontmatter = if let Some(rest) = source.strip_prefix("---") {
+        rest.split("---").next().unwrap_or("").to_string()
+    } else {
+        String::new()
+    };
+    let mut props = extract_tsx_props_hints(&frontmatter);
+    if let Ok(re) = Regex::new(r"interface\s+Props\s*\{([^}]+)\}") {
+        if let Some(caps) = re.captures(&frontmatter) {
+            props.extend(parse_ts_interface_props(&caps[1]));
+        }
+    }
+    ParsedComponent {
+        name: extract_component_name(&frontmatter, file_path),
+        description: extract_description(source, &frontmatter),
+        props: dedupe_props(props),
+        events: vec![],
+        slots: extract_slots(source),
+        tags: vec!["astro".into()],
+    }
+}
+
+fn parse_angular_component(source: &str, file_path: &str) -> ParsedComponent {
+    let mut props = Vec::new();
+    let mut events = Vec::new();
+    if let Ok(re) = Regex::new(r"@Input\s*(?:\([^)]*\))?\s*(?:public|private|protected|readonly)?\s*(\w+)\s*[:=]") {
+        for name in capture_all(&re, source) {
+            props.push(PropDef {
+                name,
+                r#type: None,
+                default: None,
+                required: false,
+                description: Some("@Input".into()),
+            });
+        }
+    }
+    if let Ok(re) = Regex::new(r#"@Input\s*\(\s*['"](\w+)['"]"#) {
+        for name in capture_all(&re, source) {
+            props.push(PropDef {
+                name,
+                r#type: None,
+                default: None,
+                required: false,
+                description: Some("@Input".into()),
+            });
+        }
+    }
+    if let Ok(re) = Regex::new(r"@Output\s*(?:\([^)]*\))?\s*(?:public|private|protected|readonly)?\s*(\w+)\s*[:=]") {
+        for name in capture_all(&re, source) {
+            events.push(EventDef {
+                name,
+                payload: Some("EventEmitter".into()),
+                description: Some("@Output".into()),
+            });
+        }
+    }
+    let name = if let Ok(re) = Regex::new(r"export\s+class\s+(\w+)") {
+        re.captures(source)
+            .map(|c| c[1].to_string())
+            .unwrap_or_else(|| extract_component_name(source, file_path))
+    } else {
+        extract_component_name(source, file_path)
+    };
+    ParsedComponent {
+        name,
+        description: extract_description(source, source),
+        props: dedupe_props(props),
+        events,
+        slots: vec![],
+        tags: vec!["angular".into()],
+    }
+}
+
+fn parse_miniprogram_component(
+    source: &str,
+    file_path: &str,
+    companions: &[(String, String)],
+) -> ParsedComponent {
+    let js = companions
+        .iter()
+        .find(|(n, _)| n.ends_with(".js") || n.ends_with(".ts"))
+        .map(|(_, b)| b.as_str())
+        .unwrap_or("");
+    let mut props = Vec::new();
+    if let Ok(re) = Regex::new(r"(?s)properties\s*:\s*\{(.*)\}") {
+        if let Some(caps) = re.captures(js) {
+            let block = &caps[1];
+            if let Ok(re2) = Regex::new(r"(?m)^\s*(\w+)\s*:") {
+                for name in capture_all(&re2, block) {
+                    if !matches!(name.as_str(), "type" | "value" | "observer" | "optionalTypes") {
+                        props.push(PropDef {
+                            name,
+                            r#type: None,
+                            default: None,
+                            required: false,
+                            description: Some("properties".into()),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    ParsedComponent {
+        name: clean_component_stem(file_path),
+        description: extract_description(source, js),
+        props: dedupe_props(props),
+        events: vec![],
+        slots: extract_slots(source),
+        tags: vec!["miniprogram".into(), "wechat".into()],
+    }
+}
+
+fn parse_flutter_component(source: &str, file_path: &str) -> ParsedComponent {
+    let name = if let Ok(re) = Regex::new(r"class\s+(\w+)\s+extends\s+StatelessWidget|class\s+(\w+)\s+extends\s+StatefulWidget|class\s+(\w+)\s+extends\s+Widget") {
+        re.captures(source)
+            .and_then(|c| c.get(1).or(c.get(2)).or(c.get(3)).map(|m| m.as_str().to_string()))
+            .unwrap_or_else(|| extract_component_name(source, file_path))
+    } else {
+        extract_component_name(source, file_path)
+    };
+    let mut props = Vec::new();
+    if let Ok(re) = Regex::new(r"(?m)^\s*final\s+[\w<>,\s\?]+\s+(\w+)\s*;") {
+        for n in capture_all(&re, source) {
+            if n != "key" {
+                props.push(PropDef {
+                    name: n,
+                    r#type: None,
+                    default: None,
+                    required: false,
+                    description: Some("final field".into()),
+                });
+            }
+        }
+    }
+    ParsedComponent {
+        name,
+        description: extract_description(source, source),
+        props: dedupe_props(props),
+        events: vec![],
+        slots: vec![],
+        tags: vec!["flutter".into(), "dart".into()],
+    }
+}
+
+fn parse_lit_or_wc_component(source: &str, file_path: &str, framework: &str) -> ParsedComponent {
+    let mut props = Vec::new();
+    if let Ok(re) = Regex::new(r"@property\s*(?:\([^)]*\))?\s*(?:accessor\s+)?(\w+)") {
+        for name in capture_all(&re, source) {
+            props.push(PropDef {
+                name,
+                r#type: None,
+                default: None,
+                required: false,
+                description: Some("@property".into()),
+            });
+        }
+    }
+    if let Ok(re) = Regex::new(r#"static\s+(?:get\s+)?properties\s*\(\s*\)\s*\{|static\s+properties\s*=\s*\{"#) {
+        if re.is_match(source) {
+            if let Some(block) = extract_balanced_block(source, "properties", "}") {
+                if let Ok(re2) = Regex::new(r"(?m)^\s*(\w+)\s*:") {
+                    for name in capture_all(&re2, &block) {
+                        props.push(PropDef {
+                            name,
+                            r#type: None,
+                            default: None,
+                            required: false,
+                            description: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    let name = if let Ok(re) = Regex::new(r#"customElements\.define\(\s*['"]([^'"]+)['"]"#) {
+        re.captures(source)
+            .map(|c| c[1].to_string())
+            .unwrap_or_else(|| extract_component_name(source, file_path))
+    } else if let Ok(re) = Regex::new(r"export\s+class\s+(\w+)") {
+        re.captures(source)
+            .map(|c| c[1].to_string())
+            .unwrap_or_else(|| extract_component_name(source, file_path))
+    } else {
+        extract_component_name(source, file_path)
+    };
+    ParsedComponent {
+        name,
+        description: extract_description(source, source),
+        props: dedupe_props(props),
+        events: vec![],
+        slots: vec![],
+        tags: vec![framework.to_string()],
+    }
+}
+
+fn extract_tsx_props_hints(source: &str) -> Vec<PropDef> {
+    let mut props = Vec::new();
+    if let Ok(re) = Regex::new(r"(?:interface|type)\s+\w*Props\w*\s*(?:=\s*)?\{([^}]+)\}") {
+        for caps in re.captures_iter(source) {
+            props.extend(parse_ts_interface_props(&caps[1]));
+        }
+    }
+    dedupe_props(props)
+}
+
 /// Collect relative component paths under `root` without loading file contents.
 pub fn collect_component_paths(root: &Path, bulk: bool) -> Vec<String> {
     let mut paths = Vec::new();
@@ -117,9 +571,9 @@ pub fn collect_component_paths(root: &Path, bulk: bool) -> Vec<String> {
             .unwrap_or_default()
             .to_lowercase();
         let ok = if bulk {
-            is_bulk_component_extension(&ext)
+            is_bulk_component_extension(&ext) || is_bulk_named_component(path)
         } else {
-            is_component_extension(&ext)
+            is_component_extension(&ext) || is_bulk_named_component(path)
         };
         if !ok || should_skip(path) {
             continue;
@@ -262,11 +716,24 @@ fn extract_component_name(script: &str, file_path: &str) -> String {
     {
         return caps[1].to_string();
     }
+    if let Some(caps) = Regex::new(r"export\s+class\s+(\w+)")
+        .ok()
+        .and_then(|re| re.captures(script))
+    {
+        return caps[1].to_string();
+    }
 
-    Path::new(file_path)
+    clean_component_stem(file_path)
+}
+
+fn clean_component_stem(file_path: &str) -> String {
+    let stem = Path::new(file_path)
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("Unknown")
+        .unwrap_or("Unknown");
+    stem.trim_end_matches(".component")
+        .trim_end_matches(".element")
+        .trim_end_matches(".widget")
         .to_string()
 }
 

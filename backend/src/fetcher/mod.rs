@@ -190,7 +190,10 @@ fn relative_path_from_url(url: &str) -> PathBuf {
 pub fn is_allowed_component_url(url: &str) -> bool {
     let lower = normalize_component_url(url).to_lowercase();
     let path = lower.split('?').next().unwrap_or("");
-    let exts = [".vue", ".uvue", ".tsx", ".jsx", ".ts", ".js", ".md", ".css", ".scss"];
+    let exts = [
+        ".vue", ".uvue", ".tsx", ".jsx", ".ts", ".js", ".svelte", ".astro", ".dart", ".wxml",
+        ".html", ".md", ".css", ".scss", ".wxss", ".json",
+    ];
     let has_ext = exts.iter().any(|e| path.ends_with(e));
     let host_ok = lower.contains("raw.githubusercontent.com")
         || lower.contains("jsdelivr.net")

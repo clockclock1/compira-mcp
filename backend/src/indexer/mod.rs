@@ -527,7 +527,9 @@ async fn ingest_directory_chunked(
         .await?;
 
     if paths.is_empty() {
-        anyhow::bail!("未找到可解析的组件文件（.vue/.uvue/.tsx/.jsx）");
+        anyhow::bail!(
+            "未找到可解析的组件文件（.vue/.uvue/.tsx/.jsx/.svelte/.astro/.dart/.wxml 或 *.component.ts）"
+        );
     }
 
     let total = paths.len();
@@ -744,7 +746,9 @@ pub fn extract_zip_upload(root: &Path, archive_name: &str, bytes: &[u8]) -> anyh
     }
 
     if component_paths.is_empty() {
-        anyhow::bail!("zip 中未找到可解析的组件文件（.vue/.uvue/.tsx/.jsx/.ts/.js）");
+        anyhow::bail!(
+            "zip 中未找到可解析的组件文件（.vue/.svelte/.astro/.tsx/.jsx/.dart/.wxml/.ts/.js 等）"
+        );
     }
     Ok(component_paths)
 }
@@ -791,7 +795,8 @@ fn should_skip_zip_entry(path: &str) -> bool {
         .unwrap_or("")
         .to_ascii_lowercase();
     const KEEP: &[&str] = &[
-        "vue", "uvue", "tsx", "jsx", "ts", "js", "md", "css", "scss", "less", "json",
+        "vue", "uvue", "tsx", "jsx", "ts", "js", "svelte", "astro", "dart", "wxml", "html", "md",
+        "css", "scss", "less", "wxss", "wxs", "json",
     ];
     !KEEP.contains(&ext.as_str())
 }

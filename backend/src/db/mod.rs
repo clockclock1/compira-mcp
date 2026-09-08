@@ -980,11 +980,29 @@ impl Database {
             conn.query_row("SELECT COUNT(*) FROM components", [], |r| r.get(0))?;
         let api_keys: i64 = conn.query_row("SELECT COUNT(*) FROM api_keys", [], |r| r.get(0))?;
         let users: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
+
+        let mut fw_stmt = conn.prepare(
+            "SELECT COALESCE(NULLIF(TRIM(LOWER(framework)), ''), 'unknown') AS fw, COUNT(*) AS c
+             FROM components
+             GROUP BY fw
+             ORDER BY c DESC",
+        )?;
+        let frameworks: Vec<serde_json::Value> = fw_stmt
+            .query_map([], |r| {
+                Ok(serde_json::json!({
+                    "framework": r.get::<_, String>(0)?,
+                    "count": r.get::<_, i64>(1)?,
+                }))
+            })?
+            .filter_map(|row| row.ok())
+            .collect();
+
         Ok(serde_json::json!({
             "libraries": libraries,
             "components": components,
             "api_keys": api_keys,
             "users": users,
+            "frameworks": frameworks,
         }))
     }
 
